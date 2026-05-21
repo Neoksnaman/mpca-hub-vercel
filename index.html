@@ -1,0 +1,60 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MPCA Hub | Internal Operations</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+                sans: ['Inter', 'sans-serif'],
+                roboto: ['Roboto', 'sans-serif'],
+            },
+            colors: {
+              primary: {
+                DEFAULT: '#B4262A',
+                dark: '#8A1D21',
+                light: '#D94B4E',
+              },
+              secondary: '#4B4B4B',
+              neutral: {
+                light: '#F8F8F8',
+                medium: '#E0E0E0',
+                dark: '#2E2E2E',
+              },
+              success: '#2E7D32',
+              warning: '#F9A825',
+              error: '#C62828',
+            },
+          },
+        },
+      }
+    </script>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.1.1/",
+    "react": "https://aistudiocdn.com/react@^19.1.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/",
+    "recharts": "https://aistudiocdn.com/recharts@^2.15.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.544.0",
+    "react-router-dom": "https://aistudiocdn.com/react-router-dom@^6.28.1"
+  }
+}
+</script>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-neutral-light dark:bg-neutral-dark">
+    <div id="root"></div>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>
