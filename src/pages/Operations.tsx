@@ -358,17 +358,6 @@ const Operations: React.FC = () => {
                 userIDs: meetingData.userIDs.join(',')
             });
 
-            // Notify attendees
-            for (const uid of meetingData.userIDs) {
-                await addNotification({
-                    userId: String(uid).trim(),
-                    title: 'Meeting Invite',
-                    message: `You have been invited to: ${meetingData.subject} on ${meetingData.date}.`,
-                    type: 'Operation',
-                    link: '/operations?tab=meetings'
-                }).catch(() => {});
-            }
-
             context?.showToast?.('Meeting recorded!', 'success');
             handleCloseMeetingForm();
             context?.refreshData();
@@ -391,17 +380,6 @@ const Operations: React.FC = () => {
                 date: formatDateForSheet(meetingData.date),
                 userIDs: meetingData.userIDs.join(',')
             });
-
-            // Notify attendees about update
-            for (const uid of meetingData.userIDs) {
-                await addNotification({
-                    userId: String(uid).trim(),
-                    title: 'Meeting Updated',
-                    message: `The meeting "${meetingData.subject}" has been updated.`,
-                    type: 'Operation',
-                    link: '/operations?tab=meetings'
-                }).catch(() => {});
-            }
 
             context?.showToast?.('Meeting updated!', 'success');
             // Update the selected item state so the drawer reflects changes immediately

@@ -1740,137 +1740,16 @@ app.delete('/api/meetings/:id', async (req, res) => {
 });
 
 export async function runDeadlineChecks() {
-  try {
-    console.log('Running auto deadline reminder check...');
-    if (!SPREADSHEET_ID) {
-      console.warn('runDeadlineChecks: GOOGLE_SHEET_ID is not configured');
-      return;
-    }
-    const sheetsRes = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId: SPREADSHEET_ID,
-      ranges: ['specialEngagements!A:O', 'retainerLog!A:J', 'notifications!A:H', 'users!A:K'],
-    });
-
-    const ranges = sheetsRes.data.valueRanges || [];
-    const specialRows = ranges[0].values || [];
-    const retainerRows = ranges[1].values || [];
-    const notifRows = ranges[2].values || [];
-    const userRows = ranges[3].values || [];
-
-    const existingNotifs = new Set<string>();
-    for (let i = 1; i < notifRows.length; i++) {
-       const title = notifRows[i][2];
-       const msg = notifRows[i][3];
-       if (title === 'Deadline Approaching') {
-          existingNotifs.add(msg);
-       }
-    }
-
-    const nameToId = new Map<string, string>();
-    for (let i = 1; i < userRows.length; i++) {
-        const id = userRows[i][0];
-        const first = userRows[i][3];
-        const last = userRows[i][4];
-        nameToId.set(`${first} ${last}`, id);
-        nameToId.set(first, id);
-    }
-
-    const now = new Date();
-    const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
-    const newNotifs: any[][] = [];
-
-    // Check special engagements
-    for (let i = 1; i < specialRows.length; i++) {
-       const row = specialRows[i];
-       const endDateStr = row[10];
-       const status = row[11];
-       const staffName = row[7];
-       
-       if (!endDateStr || status === 'Completed') continue;
-
-       const endDate = new Date(endDateStr);
-       if (isNaN(endDate.getTime())) continue;
-
-       const diffMs = endDate.getTime() - now.getTime();
-       if (diffMs > 0 && diffMs <= threeDaysMs) {
-           const projName = row[3];
-           const clientName = row[2];
-           const msg = `Project "${projName}" for ${clientName} is due in less than 3 days.`;
-           
-           if (!existingNotifs.has(msg)) {
-              const staffId = nameToId.get(staffName) || staffName;
-              if (staffId) {
-                 newNotifs.push([
-                    crypto.randomUUID(), staffId, 'Deadline Approaching', msg, 'Engagement', '/engagements', 'FALSE', new Date().toISOString()
-                 ]);
-                 existingNotifs.add(msg);
-              }
-           }
-       }
-    }
-
-    // Check retainer tasks
-    for (let i = 1; i < retainerRows.length; i++) {
-       const row = retainerRows[i];
-       const deadlineStr = row[5];
-       const status = row[8];
-       const staffName = row[9];
-       
-       if (!deadlineStr || status === 'Completed') continue;
-
-       const deadlineDate = new Date(deadlineStr);
-       if (isNaN(deadlineDate.getTime())) continue;
-
-       const diffMs = deadlineDate.getTime() - now.getTime();
-       if (diffMs > 0 && diffMs <= threeDaysMs) {
-           const service = row[1];
-           const clientName = row[3];
-           const msg = `Task "${service}" for ${clientName} is due in less than 3 days.`;
-           
-           if (!existingNotifs.has(msg)) {
-              const staffId = nameToId.get(staffName) || staffName;
-              if (staffId) {
-                 newNotifs.push([
-                    crypto.randomUUID(), staffId, 'Deadline Approaching', msg, 'Engagement', '/engagements', 'FALSE', new Date().toISOString()
-                 ]);
-                 existingNotifs.add(msg);
-              }
-           }
-       }
-    }
-
-    if (newNotifs.length > 0) {
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: SPREADSHEET_ID,
-          range: 'notifications!A:H',
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: newNotifs },
-        });
-        console.log(`Pushed ${newNotifs.length} automated deadline notifications.`);
-    }
-
-  } catch (err) {
-    console.error('Error running automated deadline check:', err);
-    throw err;
-  }
+  console.log('Backend auto deadline notification generation is disabled. The header generates these notifications on the frontend.');
 }
 
-// --- Cron endpoint for automated deadline checks ---
-app.get('/api/cron/reminders', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  const isVercelCron = req.headers['x-vercel-cron'] === 'true';
-  const cronSecret = process.env.CRON_SECRET;
-
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}` && !isVercelCron) {
-    console.warn('Unauthorized attempt to trigger cron endpoint');
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
+// --- Endpoint to trigger deadline checks from frontend ---
+app.post('/api/check-deadlines', async (req, res) => {
   try {
     await runDeadlineChecks();
-    res.json({ success: true, message: 'Deadline checks completed successfully' });
+    res.json({ success: true, message: 'Dynamic deadline notifications are generated on the frontend only' });
   } catch (error: any) {
-    console.error('Cron check failed:', error);
+    console.error('Check deadlines failed:', error);
     res.status(500).json({ error: error.message });
   }
 });

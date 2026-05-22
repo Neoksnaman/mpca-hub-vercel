@@ -18,6 +18,7 @@ const TaxComplianceRows = ({
     targetClientId,
     retainers
 }: {
+    key?: React.Key,
     assignment: any,
     updateAssignment: (id: string, updates: any) => void,
     context: any,
@@ -216,6 +217,7 @@ const ServiceAssignmentBox = ({
     editingRetainerId,
     assignments
 }: {
+    key?: React.Key,
     assignment: any,
     updateAssignment: (id: string, updates: any) => void,
     removeAssignmentBox: (id: string) => void,
@@ -376,6 +378,7 @@ const SpecialEngagementBox = ({
     context,
     specialAssignments
 }: {
+    key?: React.Key,
     task: any,
     updateSpecialAssignment: (id: string, updates: any) => void,
     removeSpecialBox: (id: string) => void,
@@ -501,6 +504,7 @@ const CredentialBox = ({
     onSave,
     isSubmitting
 }: {
+    key?: React.Key,
     credential: any,
     onEdit?: (c: any) => void,
     onDelete?: (id: string) => void,
@@ -674,7 +678,7 @@ const CredentialBox = ({
     );
 };
 
-const ClientTable = ({ clients, title, activeTab, onViewDetails, defaultExpanded = false }: { clients: any[], title?: string, activeTab: string, onViewDetails?: (client: any) => void, defaultExpanded?: boolean }) => {
+const ClientTable = ({ clients, title, activeTab, onViewDetails, defaultExpanded = false }: { key?: React.Key, clients: any[], title?: string, activeTab: string, onViewDetails?: (client: any) => void, defaultExpanded?: boolean }) => {
     const context = useContext(AppContext);
     const allUsers = context?.allUsers || [];
     const [isExpanded, setIsExpanded] = useState(defaultExpanded || !title);
@@ -844,7 +848,7 @@ const ClientTable = ({ clients, title, activeTab, onViewDetails, defaultExpanded
                                         </td>
                                         <td className="px-4 py-2.5">
                                             {(() => {
-                                                const staffArr = Array.from(activeTab === 'Retainer' ? client.retainerStaff :
+                                                const staffArr = Array.from<string>(activeTab === 'Retainer' ? client.retainerStaff :
                                                     activeTab === 'Special' ? client.specialStaff :
                                                         client.staff || []);
 
@@ -1171,6 +1175,7 @@ const Clients: React.FC = () => {
                 await deleteCredential(itemToDelete.data.id);
                 context?.showToast('Credential deleted successfully!', 'success');
             }
+            setItemToDelete(null);
             if (context?.refreshData) await context.refreshData();
         } catch (error: any) {
             context?.showToast(`Failed to delete ${itemToDelete.type.toLowerCase()}: ` + error.message, 'error');
@@ -1352,8 +1357,8 @@ const Clients: React.FC = () => {
     if (query) {
         displayedClients = displayedClients.filter(c =>
             (c.name || '').toLowerCase().includes(query) ||
-            Array.from(c.types).some(t => t.toLowerCase().includes(query)) ||
-            Array.from(c.staff).some(s => s.toLowerCase().includes(query))
+            Array.from<string>(c.types).some(t => t.toLowerCase().includes(query)) ||
+            Array.from<string>(c.staff).some(s => s.toLowerCase().includes(query))
         );
     }
 

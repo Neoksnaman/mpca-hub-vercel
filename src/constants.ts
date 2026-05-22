@@ -1,8 +1,8 @@
 
-import { User, UserRole, Client, Engagement, Status, Task, Timelog, LeaveRequest, Transmittal, EngagementCategory } from './types';
+import { UserRole, Status, Task, EngagementCategory } from './types';
 import { Home, Users, CheckSquare, Briefcase, BarChart2, Settings } from 'lucide-react';
 
-export const MOCK_USER: User = {
+export const MOCK_USER: any = {
   id: 'user-1',
   username: 'Jane Doe',
   role: UserRole.MANAGER,
@@ -12,7 +12,7 @@ export const MOCK_USER: User = {
   avatarUrl: 'https://picsum.photos/seed/janedoe/100/100'
 };
 
-export const MOCK_USERS: User[] = [
+export const MOCK_USERS: any[] = [
     MOCK_USER,
     { id: 'user-2', username: 'John Smith', role: UserRole.STAFF, email: 'john.smith@myapp.com', leaveBalance: 5, status: 'Active', avatarUrl: 'https://picsum.photos/seed/johnsmith/100/100' },
     { id: 'user-3', username: 'Peter Jones', role: UserRole.STAFF, email: 'peter.jones@myapp.com', leaveBalance: 10, status: 'Active', avatarUrl: 'https://picsum.photos/seed/peterjones/100/100' },
@@ -20,13 +20,13 @@ export const MOCK_USERS: User[] = [
     { id: 'user-5', username: 'David Brown', role: UserRole.HR, email: 'david.brown@myapp.com', leaveBalance: 15, status: 'Active', avatarUrl: 'https://picsum.photos/seed/davidbrown/100/100' },
 ];
 
-export const MOCK_CLIENTS: Client[] = [
+export const MOCK_CLIENTS: any[] = [
   { id: 'client-1', name: 'Innovate Inc.', contactInfo: { email: 'contact@innovate.com', phone: '555-1234' }, industry: 'Technology' },
   { id: 'client-2', name: 'Global Logistics', contactInfo: { email: 'info@globallogistics.com', phone: '555-5678' }, industry: 'Transport' },
   { id: 'client-3', name: 'HealthFirst Medical', contactInfo: { email: 'support@healthfirst.com', phone: '555-8765' }, industry: 'Healthcare' },
 ];
 
-export const MOCK_ENGAGEMENTS: Engagement[] = [
+export const MOCK_ENGAGEMENTS: any[] = [
   { 
     id: 'eng-1', 
     clientId: 'client-1', 
@@ -107,20 +107,20 @@ export const MOCK_TASKS: Task[] = [
   { id: 'task-6', engagementId: 'eng-1', title: 'Inventory Count Observation', assigneeId: 'user-2', status: Status.TODO, dueDate: '2023-11-22' },
 ];
 
-export const MOCK_TIMELOGS: Timelog[] = [
+export const MOCK_TIMELOGS: any[] = [
   { id: 'time-1', userId: 'user-2', engagementId: 'eng-1', hours: 8, notes: 'AR testing', date: '2023-11-19' },
   { id: 'time-2', userId: 'user-3', engagementId: 'eng-4', hours: 6, notes: 'Planning meeting', date: '2023-11-18' },
   { id: 'time-3', userId: 'user-1', engagementId: 'eng-1', hours: 4, notes: 'Reviewing team progress', date: '2023-11-19' },
   { id: 'time-4', userId: 'user-2', engagementId: 'eng-1', hours: 8, notes: 'AR testing day 2', date: '2023-11-20' },
 ];
 
-export const MOCK_LEAVE_REQUESTS: LeaveRequest[] = [
+export const MOCK_LEAVE_REQUESTS: any[] = [
   { id: 'leave-1', userId: 'user-2', type: 'Annual', startDate: '2023-12-22', endDate: '2024-01-02', reason: 'Holiday vacation', status: Status.APPROVED },
   { id: 'leave-2', userId: 'user-3', type: 'Sick', startDate: '2023-11-20', endDate: '2023-11-21', reason: 'Flu', status: Status.PENDING },
   { id: 'leave-3', userId: 'user-1', type: 'Annual', startDate: '2024-01-15', endDate: '2024-01-19', reason: 'Personal trip', status: Status.PENDING },
 ];
 
-export const MOCK_TRANSMITTALS: Transmittal[] = [
+export const MOCK_TRANSMITTALS: any[] = [
   { id: 'trans-1', clientId: 'client-1', engagementId: 'eng-1', documentName: 'Audit Confirmation - Bank A', transmittedAt: '2023-11-20', receivedBy: 'John Custodian', method: 'Courier', status: 'In Transit' },
   { id: 'trans-2', clientId: 'client-2', engagementId: 'eng-3', documentName: 'Signed Tax Return - FY2023', transmittedAt: '2023-11-15', receivedBy: 'Mary Taxpayer', method: 'Portal', status: 'Acknowledged' },
   { id: 'trans-3', clientId: 'client-1', engagementId: 'eng-2', documentName: 'Voucher Samples', transmittedAt: '2023-11-18', receivedBy: 'Audit Team', method: 'Personal', status: 'Received' },

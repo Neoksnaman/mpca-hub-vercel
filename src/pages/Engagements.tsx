@@ -725,8 +725,21 @@ const Engagements: React.FC = () => {
             // Filters
             if (specialFilter.client !== 'All' && s.clientName !== specialFilter.client) return false;
             if (specialFilter.staff !== 'All' && s.assignedStaff !== specialFilter.staff) return false;
-            if (specialFilter.status !== 'All' && s.status !== specialFilter.status) return false;
             if (specialFilter.priority !== 'All' && s.priority !== specialFilter.priority) return false;
+
+            // Status filter uses computed display status (accounts for Overdue)
+            if (specialFilter.status !== 'All') {
+                let displayStatus = s.status;
+                if (s.status !== 'Completed' && s.endDate) {
+                    try {
+                        const [m, d, y] = s.endDate.split('/');
+                        const endDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+                        endDate.setHours(23, 59, 59, 999);
+                        if (new Date() > endDate) displayStatus = 'Overdue';
+                    } catch (e) {}
+                }
+                if (displayStatus !== specialFilter.status) return false;
+            }
 
             return true;
         }).sort((a, b) => {
@@ -917,6 +930,20 @@ const Engagements: React.FC = () => {
                                 >
                                     <option value="All">All Staff</option>
                                     {availableSpecialStaff.map(staff => <option key={staff} value={staff}>{staff}</option>)}
+                                </select>
+
+                                <select
+                                    value={specialFilter.status}
+                                    onChange={(e) => setSpecialFilter(prev => ({ ...prev, status: e.target.value }))}
+                                    className="pl-2 pr-7 py-1.5 bg-neutral-light/50 dark:bg-gray-900 border border-transparent hover:border-neutral-medium/50 rounded-lg text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer w-[180px]"
+                                    style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%236b7280\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'%3E%3C/path%3E%3C/svg%3E")', backgroundPosition: 'right 0.4rem center', backgroundRepeat: 'no-repeat', backgroundSize: '0.9rem' }}
+                                >
+                                    <option value="All">All Status</option>
+                                    <option value="Planning">Planning</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Completed">Completed</option>
+                                    <option value="Blocked">Blocked</option>
+                                    <option value="Overdue">Overdue</option>
                                 </select>
                             </>
                         )}
@@ -1784,12 +1811,12 @@ const RetainerTable: React.FC<{
             </thead>
             <tbody className="divide-y divide-neutral-medium/30 dark:divide-gray-800">
                 {groupBy === 'None' ? items.map(inst => renderRow(inst)) : 
-                    Object.entries(items.reduce((acc, inst) => {
+                    (Object.entries(items.reduce((acc, inst) => {
                         const key = groupBy === 'Client' ? inst.clientName : groupBy === 'Compliance' ? inst.complianceName : inst.assignedStaff;
                         if (!acc[key]) acc[key] = [];
                         acc[key].push(inst);
                         return acc;
-                    }, {} as Record<string, any[]>)).map(([group, subItems]) => (
+                    }, {} as Record<string, any[]>)) as [string, any[]][]).map(([group, subItems]) => (
                         <React.Fragment key={group}>
                             <tr className="bg-neutral-light/30 dark:bg-gray-900/40">
                                 <td colSpan={6} className="px-6 py-2 border-b border-neutral-medium/50 dark:border-gray-800">
@@ -1831,7 +1858,7 @@ const RetainerTable: React.FC<{
                         </div>
                     )}
                 </CollapsibleSection>
-                {Object.entries(staffGroups).sort(([a], [b]) => a.localeCompare(b)).map(([staffName, items]) => (
+                {(Object.entries(staffGroups) as [string, any[]][]).sort(([a], [b]) => a.localeCompare(b)).map(([staffName, items]) => (
                     <CollapsibleSection key={staffName} title={`${staffName.split(' ')[0]}'s Engagements`} count={items.length} icon={<Briefcase size={16} />} color="secondary">
                         {renderTable(items)}
                     </CollapsibleSection>
@@ -1854,13 +1881,28 @@ const SpecialTable: React.FC<{
     const isStaff = user?.role === UserRole.STAFF;
 
     const renderRow = (inst: any, isChild = false) => {
+        // Frontend-only: show "Overdue" when not Completed and today > endDate
+        let displayStatus = inst.status;
+        if (inst.status !== 'Completed' && inst.endDate) {
+            try {
+                const [m, d, y] = inst.endDate.split('/');
+                const endDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+                endDate.setHours(23, 59, 59, 999);
+                const today = new Date();
+                if (today > endDate) {
+                    displayStatus = 'Overdue';
+                }
+            } catch (e) {}
+        }
+
         const statusColors: any = {
             'Completed': 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20',
             'In Progress': 'bg-blue-50 text-blue-600 border-blue-100 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20',
             'Blocked': 'bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20',
-            'Planning': 'bg-neutral-50 text-neutral-600 border-neutral-100 dark:bg-gray-500/10 dark:text-gray-400 dark:border-gray-500/20'
+            'Planning': 'bg-neutral-50 text-neutral-600 border-neutral-100 dark:bg-gray-500/10 dark:text-gray-400 dark:border-gray-500/20',
+            'Overdue': 'bg-red-50 text-red-600 border-red-100 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20'
         };
-        const statusDot: any = { 'Completed': 'bg-emerald-500', 'In Progress': 'bg-blue-500', 'Blocked': 'bg-rose-500', 'Planning': 'bg-neutral-400' };
+        const statusDot: any = { 'Completed': 'bg-emerald-500', 'In Progress': 'bg-blue-500', 'Blocked': 'bg-rose-500', 'Planning': 'bg-neutral-400', 'Overdue': 'bg-red-500' };
 
         return (
             <tr
@@ -1907,9 +1949,9 @@ const SpecialTable: React.FC<{
                     </div>
                 </td>
                 <td className="px-4 py-2.5">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest border shadow-sm ${statusColors[inst.status] || statusColors['Planning']}`}>
-                        <div className={`w-1 h-1 rounded-full mr-1.5 ${statusDot[inst.status] || statusDot['Planning']}`} />
-                        {inst.status}
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest border shadow-sm ${statusColors[displayStatus] || statusColors['Planning']}`}>
+                        <div className={`w-1 h-1 rounded-full mr-1.5 ${statusDot[displayStatus] || statusDot['Planning']}`} />
+                        {displayStatus}
                     </span>
                 </td>
                 <td className="px-4 py-2.5 text-right">
@@ -1937,12 +1979,12 @@ const SpecialTable: React.FC<{
             </thead>
             <tbody className="divide-y divide-neutral-medium/30 dark:divide-gray-800">
                 {groupBy === 'None' ? items.map(inst => renderRow(inst)) : 
-                    Object.entries(items.reduce((acc, inst) => {
+                    (Object.entries(items.reduce((acc, inst) => {
                         const key = groupBy === 'Client' ? inst.clientName : inst.assignedStaff;
                         if (!acc[key]) acc[key] = [];
                         acc[key].push(inst);
                         return acc;
-                    }, {} as Record<string, any[]>)).map(([group, subItems]) => (
+                    }, {} as Record<string, any[]>)) as [string, any[]][]).map(([group, subItems]) => (
                         <React.Fragment key={group}>
                             <tr className="bg-neutral-light/30 dark:bg-gray-900/40">
                                 <td colSpan={6} className="px-6 py-2 border-b border-neutral-medium/50 dark:border-gray-800">
@@ -1984,7 +2026,7 @@ const SpecialTable: React.FC<{
                         </div>
                     )}
                 </CollapsibleSection>
-                {Object.entries(staffGroups).sort(([a], [b]) => a.localeCompare(b)).map(([staffName, items]) => (
+                {(Object.entries(staffGroups) as [string, any[]][]).sort(([a], [b]) => a.localeCompare(b)).map(([staffName, items]) => (
                     <CollapsibleSection key={staffName} title={`${staffName.split(' ')[0]}'s Projects`} count={items.length} icon={<Briefcase size={16} />} color="secondary">
                         {renderTable(items)}
                     </CollapsibleSection>

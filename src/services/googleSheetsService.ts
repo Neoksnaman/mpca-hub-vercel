@@ -217,7 +217,7 @@ export const addClient = (clientData: Omit<Client, 'id'>) =>
 export const updateClient = (id: string, data: any) => 
     apiCall<any>(`/api/clients/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const addRetainer = (data: { clientId: string; serviceId: string; assignedStaffId: string; startDate: string; status: string; }) => 
+export const addRetainer = (data: { clientId: string; assignments?: any[]; serviceId?: string; assignedStaffId?: string; startDate?: string; status?: string; }) => 
     apiCall<any>('/api/retainers', { method: 'POST', body: JSON.stringify(data) });
 
 export const updateRetainer = (id: string, data: any) => 
@@ -289,4 +289,5 @@ export const updateUserPassword = (id: string, currentPassword: string, newPassw
 export const uploadAvatar = (avatarDataUrl: string, username: string) => 
     apiCall<{ id: string; url: string }>('/api/upload-avatar', { method: 'POST', body: JSON.stringify({ avatarDataUrl, username }) });
 
-
+export const checkDeadlines = () => 
+    apiCall<{ success: boolean; message: string }>('/api/check-deadlines', { method: 'POST' });

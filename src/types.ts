@@ -103,6 +103,15 @@ export interface ProjectTask {
   status: string;
 }
 
+export interface Task {
+  id: string;
+  engagementId: string;
+  title: string;
+  assigneeId: string;
+  status: Status;
+  dueDate: string;
+}
+
 export interface ProjectActivity {
   activityID: string;
   taskID: string;
@@ -201,4 +210,3 @@ export interface User {
   avatarUrl: string;
   email?: string;
 }
-

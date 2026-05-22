@@ -3,24 +3,9 @@ import React, { useContext, useState, useRef, useEffect } from 'react';
 import { Menu, Bell, User, Sun, Moon, Briefcase, Calendar, Check, AlertCircle } from 'lucide-react';
 import { AppContext } from '../App';
 import { markNotificationRead, markAllNotificationsRead } from '../services/googleSheetsService';
-import { months, computeActualDueDate } from '../utils/dateUtils';
+import { months, computeActualDueDate, parseDateStr } from '../utils/dateUtils';
 
 const AUTO_NOTIF_IDS = ['approaching-deadlines', 'overdue-deadlines', 'transmittal-upload-warning'];
-
-const parseTransmittalDate = (dateStr: string): Date | null => {
-    if (!dateStr) return null;
-    let date;
-    if (dateStr.includes('/')) {
-        const [m, d, y] = dateStr.split('/');
-        date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
-    } else if (dateStr.includes('-')) {
-        const [y, m, d] = dateStr.split('-');
-        date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
-    } else {
-        date = new Date(dateStr);
-    }
-    return isNaN(date.getTime()) ? null : date;
-};
 
 interface HeaderProps {
   isSidebarOpen: boolean;
@@ -73,23 +58,36 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
   // --- Role Visibility Helper ---
   const isManagerOrAbove = user?.role === 'Manager' || user?.role === 'Supervisor' || user?.role === 'Admin';
   
+  const isItemVisible = (assignedStaff: string) => {
+      if (isManagerOrAbove) return true;
+      const staffName = String(assignedStaff || '').trim();
+      const isOwn = staffName === user?.firstName || staffName === `${user?.firstName} ${user?.lastName}` || staffName === userFullName || staffName === user?.id;
+      if (isOwn) return true;
+      
+      if (user?.role === 'Senior') {
+          const staff = (context.users || []).find((u: any) => u.firstName === staffName || `${u.firstName} ${u.lastName}` === staffName || String(u.id) === staffName);
+          return !!(staff && staff.team === user.team);
+      }
+      return false;
+  };
+
   // 1. Check Specials
-  const mySpecials = (context.specials || []).filter(s => isManagerOrAbove || s.assignedStaff === user?.id || s.assignedStaff === user?.firstName || s.assignedStaff === userFullName);
+  const mySpecials = (context.specials || []).filter(s => isItemVisible(s.assignedStaff));
   mySpecials.forEach(s => {
       if (s.status === 'Completed' || !s.endDate) return;
-      const endDate = new Date(s.endDate);
-      if (isNaN(endDate.getTime())) return;
+      const endDate = parseDateStr(s.endDate);
+      if (!endDate || isNaN(endDate.getTime())) return;
       endDate.setHours(12, 0, 0, 0);
       const diff = endDate.getTime() - now.getTime();
       if (diff >= 0 && diff <= fiveDaysMs) {
           approachingSpecials++;
-      } else if (diff >= -threeDaysMs && diff < 0) {
+      } else if (diff < 0) {
           overdueSpecials++;
       }
   });
 
   // 2. Check Retainers
-  const myRetainers = (context.retainers || []).filter(r => isManagerOrAbove || r.assignedStaff === user?.id || r.assignedStaff === user?.firstName || r.assignedStaff === userFullName);
+  const myRetainers = (context.retainers || []).filter(r => isItemVisible(r.assignedStaff));
   const currentMonthIdx = now.getMonth();
   const currentYear = now.getFullYear();
   
@@ -109,24 +107,36 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
       const retainer = myRetainers.find(r => normalizeId(r.id) === normalizeId(d.retainerID));
       if (!retainer) return;
       const client = context.clients?.find(c => normalizeId(c.id) === normalizeId(retainer.clientId));
-      const compliance = context.taxCompliances?.find(tc => normalizeId(tc.taxID) === normalizeId(d.taxID));
-      const frequency = compliance?.frequency || 'Monthly';
+      if (!client || client.status === 'Inactive') return;
+
+      const frequency = d.dueDate.startsWith('M') ? 'Monthly' :
+          d.dueDate.startsWith('Q') ? 'Quarterly' :
+              (d.dueDate.startsWith('Y') || d.dueDate.startsWith('A')) ? 'Annual' : 'Monthly';
+
+      const calendarOnlyTaxIDs = ['0007', '0008', '0012', '0013', '0016', '0017', '0018', '0019', '0020', '0021', '0022'].map(id => normalizeId(id));
+      const isCalendarOnly = calendarOnlyTaxIDs.includes(normalizeId(d.taxID));
+      const normalizedTaxID = normalizeId(d.taxID);
       
       monthsToCheck.forEach(({ month, monthIdx, year }) => {
-          let fyMonth = 12;
-          if (client?.fiscalYearEnd) fyMonth = parseInt(client.fiscalYearEnd.split('/')[0], 10);
+          const currentMonthNum = monthIdx + 1;
+          let fyMonth = isCalendarOnly ? 12 : (client?.fiscalYearEnd ? parseInt(client.fiscalYearEnd.split('/')[0], 10) : 12);
 
-          if (frequency === 'Quarterly') {
-              const diff = (monthIdx - (fyMonth - 1) + 12) % 3;
-              if (diff !== 0) return;
-              const no4thQtrTaxIDs = ['0009', '0010', '0014', '0015'].map(id => normalizeId(id));
-              if (no4thQtrTaxIDs.includes(normalizeId(d.taxID)) && (monthIdx + 1) === fyMonth) return;
-          } else if (frequency === 'Annual') {
-              if (monthIdx !== (fyMonth - 1)) return;
+          // Special Rule: 0619E (0001) and 0619F (0002) have no March, June, September, and December
+          if (['1', '2'].includes(normalizedTaxID)) {
+              if ([3, 6, 9, 12].includes(currentMonthNum)) return;
           }
 
-          const dueInfo = computeActualDueDate(month, String(year), d.dueDate, client?.fiscalYearEnd || '12/31');
-          const periodKey = `${String(monthIdx + 1).padStart(2, '0')}/${year}`;
+          if (frequency === 'Quarterly') {
+              const diff = (currentMonthNum - fyMonth + 12) % 3;
+              if (diff !== 0) return;
+              const no4thQtrTaxIDs = ['0009', '0010', '0014', '0015'].map(id => normalizeId(id));
+              if (no4thQtrTaxIDs.includes(normalizedTaxID) && currentMonthNum === fyMonth) return;
+          } else if (frequency === 'Annual') {
+              if (currentMonthNum !== fyMonth) return;
+          }
+
+          const dueInfo = computeActualDueDate(month, String(year), d.dueDate, isCalendarOnly ? '12/31' : (client?.fiscalYearEnd || '12/31'));
+          const periodKey = `${String(currentMonthNum).padStart(2, '0')}/${year}`;
           const match = context.retainerLogs?.find(l => normalizeId(l[0]) === normalizeId(d.deadlineID) && l[1] === periodKey);
           
           if (!match || !match[2]) { // Not filed yet
@@ -135,7 +145,7 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
              const diff = compareDue.getTime() - now.getTime();
              if (diff >= 0 && diff <= threeDaysMs) {
                  approachingRetainers++;
-             } else if (diff >= -threeDaysMs && diff < 0) {
+             } else if (diff < 0) {
                  overdueRetainers++;
              }
           }
@@ -148,7 +158,7 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
       if (!isManagerOrAbove && String(t.userID) !== String(user?.id)) return;
       if (t.receiptUrl) return; // receiptUrl exists means status is 'Delivered', empty means 'Released'
 
-      const creationDate = parseTransmittalDate(t.date);
+      const creationDate = parseDateStr(t.date);
       if (!creationDate) return;
       creationDate.setHours(12, 0, 0, 0);
 
@@ -182,8 +192,8 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
 
   if (overdueRetainers > 0 || overdueSpecials > 0) {
       const summaryMsg = [];
-      if (overdueRetainers > 0) summaryMsg.push(`${overdueRetainers} Retainer task(s) late by < 3 days`);
-      if (overdueSpecials > 0) summaryMsg.push(`${overdueSpecials} Special project(s) late by < 3 days`);
+      if (overdueRetainers > 0) summaryMsg.push(`${overdueRetainers} Retainer task(s) overdue`);
+      if (overdueSpecials > 0) summaryMsg.push(`${overdueSpecials} Special project(s) overdue`);
       
       dynamicNotifs.push({
           id: 'overdue-deadlines',

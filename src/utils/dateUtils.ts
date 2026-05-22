@@ -50,3 +50,18 @@ export const computeActualDueDate = (monthStr: string, yearStr: string, code: st
         raw: date
     };
 };
+
+export const parseDateStr = (dateStr: string): Date | null => {
+    if (!dateStr) return null;
+    let date;
+    if (dateStr.includes('/')) {
+        const [m, d, y] = dateStr.split('/');
+        date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+    } else if (dateStr.includes('-')) {
+        const [y, m, d] = dateStr.split('-');
+        date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+    } else {
+        date = new Date(dateStr);
+    }
+    return isNaN(date.getTime()) ? null : date;
+};
