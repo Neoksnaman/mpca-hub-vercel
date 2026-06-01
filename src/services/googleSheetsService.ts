@@ -19,7 +19,7 @@ async function apiCall<T>(url: string, options: RequestInit = {}): Promise<T> {
     };
 
     const response = await fetch(url, defaultOptions);
-    
+
     if (!response.ok) {
         let errorMsg = 'An error occurred';
         try {
@@ -28,12 +28,12 @@ async function apiCall<T>(url: string, options: RequestInit = {}): Promise<T> {
         } catch (e) {
             errorMsg = `Server error: ${response.status} ${response.statusText}`;
         }
-        
+
         // Handle 401 Unauthorized globally
         if (response.status === 401) {
             // Optional: window.location.href = '/login';
         }
-        
+
         throw new Error(errorMsg);
     }
 
@@ -103,7 +103,7 @@ const mapRetainer = (row: any, services: Service[], users: User[]): RetainerEnga
 
 export const isAuthenticated = () => true;
 
-export const loginWithUsernamePassword = (username: string, password: string) => 
+export const loginWithUsernamePassword = (username: string, password: string) =>
     apiCall<User>('/api/login', { method: 'POST', body: JSON.stringify({ username, password }) });
 
 export const fetchAllData = async (): Promise<AppData> => {
@@ -111,7 +111,7 @@ export const fetchAllData = async (): Promise<AppData> => {
 
     const services = (rawData.services || []).map((row: any) => mapRow(row, ['id', 'name', 'type'])) as Service[];
     const users = (rawData.users || []).map(mapUser);
-    
+
     const getServiceName = (id: string) => {
         const s = services.find(s => normalizeId(s.id) === normalizeId(id));
         return s ? s.name : id;
@@ -143,7 +143,7 @@ export const fetchAllData = async (): Promise<AppData> => {
             } as SpecialEngagement;
         });
 
-    const taxes = (rawData.taxes || []).map((row: any[]) => 
+    const taxes = (rawData.taxes || []).map((row: any[]) =>
         mapRow(row, ['id', 'clientId', 'formType', 'period', 'deadlineDate', 'filingStatus', 'confirmationNumber'])
     );
 
@@ -158,10 +158,10 @@ export const fetchAllData = async (): Promise<AppData> => {
     const meetings = (rawData.meetings || []) as Meeting[];
     const notifications = (rawData.notifications || []) as Notification[];
 
-    return { 
-        retainers, specials, taxes, users, clients, deliverables, services, 
-        taxCompliances, deadlines, retainerLogs, taskLog, activityLog, 
-        credentials, transmittals, meetings, notifications 
+    return {
+        retainers, specials, taxes, users, clients, deliverables, services,
+        taxCompliances, deadlines, retainerLogs, taskLog, activityLog,
+        credentials, transmittals, meetings, notifications
     };
 };
 
@@ -174,11 +174,11 @@ export const uploadFile = (file: File, type: 'Transmittal' | 'Meeting') => {
     return apiCall<{ id: string, url: string }>('/api/upload', {
         method: 'POST',
         body: formData,
-        headers: {} 
+        headers: {}
     });
 };
 
-export const deleteFile = (fileId: string) => 
+export const deleteFile = (fileId: string) =>
     apiCall<any>(`/api/delete-file/${fileId}`, { method: 'DELETE' });
 
 export const addTransmittal = (data: Omit<Transmittal, 'transmittalID'>) =>
@@ -199,6 +199,9 @@ export const addNotification = (data: Omit<Notification, 'id' | 'createdAt' | 'i
         body: JSON.stringify(data)
     });
 
+export const fetchNotifications = (userId: string, limit = 50) =>
+    apiCall<Notification[]>(`/api/notifications?userId=${encodeURIComponent(userId)}&limit=${limit}`);
+
 export const markNotificationRead = (id: string) =>
     apiCall<{ success: boolean }>('/api/notifications/read', {
         method: 'POST',
@@ -211,83 +214,92 @@ export const markAllNotificationsRead = (userId: string) =>
         body: JSON.stringify({ userId })
     });
 
-export const addClient = (clientData: Omit<Client, 'id'>) => 
+export const addClient = (clientData: Omit<Client, 'id'>) =>
     apiCall<Client>('/api/clients', { method: 'POST', body: JSON.stringify(clientData) });
 
-export const updateClient = (id: string, data: any) => 
+export const updateClient = (id: string, data: any) =>
     apiCall<any>(`/api/clients/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const addRetainer = (data: { clientId: string; assignments?: any[]; serviceId?: string; assignedStaffId?: string; startDate?: string; status?: string; }) => 
+export const addRetainer = (data: { clientId: string; assignments?: any[]; serviceId?: string; assignedStaffId?: string; startDate?: string; status?: string; }) =>
     apiCall<any>('/api/retainers', { method: 'POST', body: JSON.stringify(data) });
 
-export const updateRetainer = (id: string, data: any) => 
+export const updateRetainer = (id: string, data: any) =>
     apiCall<any>(`/api/retainers/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const deleteRetainer = (id: string) => 
+export const deleteRetainer = (id: string) =>
     apiCall<any>(`/api/retainers/${id}`, { method: 'DELETE' });
 
-export const addSpecial = (data: { clientId: string, assignments: any[] }) => 
+export const addSpecial = (data: { clientId: string, assignments: any[] }) =>
     apiCall<any>('/api/specials', { method: 'POST', body: JSON.stringify(data) });
 
-export const updateSpecial = (id: string, data: any) => 
+export const updateSpecial = (id: string, data: any) =>
     apiCall<any>(`/api/specials/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const deleteSpecial = (id: string) => 
+export const deleteSpecial = (id: string) =>
     apiCall<any>(`/api/specials/${id}`, { method: 'DELETE' });
 
-export const addRetainerLog = (data: { deadline: string; period: string; dateCompleted: string; remarks?: string; }) => 
+export const addRetainerLog = (data: { deadline: string; period: string; dateCompleted: string; remarks?: string; }) =>
     apiCall<any>('/api/retainer-logs', { method: 'POST', body: JSON.stringify(data) });
 
-export const updateRetainerLog = (data: { deadline: string; period: string; dateCompleted: string; remarks?: string; }) => 
+export const updateRetainerLog = (data: { deadline: string; period: string; dateCompleted: string; remarks?: string; }) =>
     apiCall<any>('/api/retainer-logs', { method: 'PUT', body: JSON.stringify(data) });
 
-export const addTask = (data: { taskID: string; specialID: string; taskName: string; status?: string; }) => 
+export const fetchSpecialWorklog = (specialID: string) =>
+    apiCall<{ taskLog: any[]; activityLog: any[] }>(`/api/specials/${specialID}/worklog`);
+
+export const addTask = (data: { taskID?: string; specialID: string; taskName: string; status?: string; }) =>
     apiCall<any>('/api/tasks', { method: 'POST', body: JSON.stringify(data) });
 
-export const addActivity = (data: { activityID: string; taskID: string; dateCompleted: string; description: string; }) => 
+export const addActivity = (data: { activityID?: string; taskID: string; dateCompleted: string; description: string; }) =>
     apiCall<any>('/api/activities', { method: 'POST', body: JSON.stringify(data) });
 
-export const updateTask = (taskID: string, data: { taskName?: string; status?: string }) => 
+export const updateTask = (taskID: string, data: { taskName?: string; status?: string }) =>
     apiCall<any>(`/api/tasks/${taskID}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const updateActivity = (activityID: string, data: { description?: string; dateCompleted?: string }) => 
+export const updateActivity = (activityID: string, data: { description?: string; dateCompleted?: string }) =>
     apiCall<any>(`/api/activities/${activityID}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const deleteActivity = (id: string) => 
+export const deleteActivity = (id: string) =>
     apiCall<any>(`/api/activities/${id}`, { method: 'DELETE' });
 
-export const deleteTask = (id: string) => 
+export const deleteTask = (id: string) =>
     apiCall<any>(`/api/tasks/${id}`, { method: 'DELETE' });
 
-export const addCredential = (data: Omit<ClientCredential, 'credentialID'>) => 
+export const addCredential = (data: Omit<ClientCredential, 'credentialID'>) =>
     apiCall<any>('/api/credentials', { method: 'POST', body: JSON.stringify(data) });
 
-export const updateCredential = (id: string, data: Partial<ClientCredential>) => 
+export const updateCredential = (id: string, data: Partial<ClientCredential>) =>
     apiCall<any>(`/api/credentials/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const deleteCredential = (id: string) => 
+export const deleteCredential = (id: string) =>
     apiCall<any>(`/api/credentials/${id}`, { method: 'DELETE' });
 
-export const updateTransmittal = (id: string, data: Partial<Transmittal>) => 
+export const updateTransmittal = (id: string, data: Partial<Transmittal>) =>
     apiCall<any>(`/api/transmittals/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const updateMeeting = (id: string, data: Partial<Meeting>) => 
+export const updateMeeting = (id: string, data: Partial<Meeting>) =>
     apiCall<any>(`/api/meetings/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const deleteTransmittal = (id: string) => 
+export const deleteTransmittal = (id: string) =>
     apiCall<any>(`/api/transmittals/${id}`, { method: 'DELETE' });
 
-export const deleteMeeting = (id: string) => 
+export const deleteMeeting = (id: string) =>
     apiCall<any>(`/api/meetings/${id}`, { method: 'DELETE' });
 
-export const updateUserProfile = (id: string, data: { firstName?: string; lastName?: string; email?: string; avatarUrl?: string; }) => 
+export const updateUserProfile = (id: string, data: { firstName?: string; lastName?: string; email?: string; avatarUrl?: string; }) =>
     apiCall<{ success: boolean; user: User }>(`/api/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const updateUserPassword = (id: string, currentPassword: string, newPassword: string) => 
+export const createUser = (data: { username: string; password: string; firstName: string; lastName: string; role: UserRole; team?: string; status: 'Active' | 'Inactive'; avatarUrl?: string; email?: string; }) =>
+    apiCall<{ success: boolean; user: User }>('/api/users', { method: 'POST', body: JSON.stringify(data) });
+
+export const updateUserAdmin = (id: string, data: { username?: string; password?: string; firstName?: string; lastName?: string; role?: UserRole; team?: string; status?: 'Active' | 'Inactive'; avatarUrl?: string; email?: string; }) =>
+    apiCall<{ success: boolean; user: User }>(`/api/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+
+export const updateUserPassword = (id: string, currentPassword: string, newPassword: string) =>
     apiCall<{ success: boolean }>(`/api/users/${id}/password`, { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) });
 
-export const uploadAvatar = (avatarDataUrl: string, username: string) => 
+export const uploadAvatar = (avatarDataUrl: string, username: string) =>
     apiCall<{ id: string; url: string }>('/api/upload-avatar', { method: 'POST', body: JSON.stringify({ avatarDataUrl, username }) });
 
-export const checkDeadlines = () => 
+export const checkDeadlines = () =>
     apiCall<{ success: boolean; message: string }>('/api/check-deadlines', { method: 'POST' });

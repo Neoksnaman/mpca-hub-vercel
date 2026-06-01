@@ -9,6 +9,8 @@ import { OAuth2Client } from 'google-auth-library';
 import multer from 'multer';
 import { Readable } from 'stream';
 import os from 'os';
+import bcrypt from 'bcryptjs';
+import { getMongoDb } from './mongo';
 
 const app = express();
 
@@ -30,6 +32,53 @@ if (REFRESH_TOKEN) {
 const sheets = google.sheets({ version: 'v4', auth });
 const drive = google.drive({ version: 'v3', auth });
 
+app.get('/api/mongo-health', async (req, res) => {
+  try {
+    const db = await getMongoDb();
+    const ping = await db.command({ ping: 1 });
+    const testDoc = {
+      message: 'MongoDB health endpoint works from MPCA app',
+      updatedAt: new Date(),
+      source: 'api/mongo-health',
+    };
+
+    await db.collection<any>('connectionTests').updateOne(
+      { _id: 'api-health-check' },
+      { $set: testDoc, $setOnInsert: { createdAt: new Date() } },
+      { upsert: true }
+    );
+
+    res.json({
+      success: true,
+      database: db.databaseName,
+      ping,
+      sampleDocumentId: 'api-health-check',
+    });
+  } catch (error: any) {
+    console.error('Mongo health check failed:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/mongo-test/users', async (req, res) => {
+  try {
+    const db = await getMongoDb();
+    const users = await db.collection('users')
+      .find({}, { projection: { password: 0, passwordHash: 0 } })
+      .limit(10)
+      .toArray();
+
+    res.json({
+      success: true,
+      count: users.length,
+      users,
+    });
+  } catch (error: any) {
+    console.error('Mongo users test failed:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 function normalizeAvatarUrl(url: string) {
   if (!url) return '';
   const driveMatch = url.match(/(?:id=|\/d\/|export=view&id=)([a-zA-Z0-9_-]{25,})/);
@@ -37,6 +86,259 @@ function normalizeAvatarUrl(url: string) {
     return `/api/avatar/${driveMatch[1]}`;
   }
   return url;
+}
+
+function userIdCandidates(id: string) {
+  const raw = String(id || '').trim();
+  const normalized = raw.replace(/^0+/, '') || '0';
+  return Array.from(new Set([raw, normalized, normalized.padStart(4, '0')]));
+}
+
+function mapMongoUser(user: any) {
+  const id = String(user?.userID || user?._id || '');
+  return {
+    id,
+    username: user?.userName || user?.username || '',
+    firstName: user?.firstName || '',
+    lastName: user?.lastName || '',
+    role: user?.role || '',
+    team: user?.team || '',
+    status: user?.status || '',
+    avatarUrl: normalizeAvatarUrl(user?.avatarUrl || ''),
+    email: user?.email || ''
+  };
+}
+
+function mapMongoNotification(notification: any) {
+  return {
+    id: String(notification?._id || notification?.id || ''),
+    userId: notification?.userId || '',
+    title: notification?.title || '',
+    message: notification?.message || '',
+    type: notification?.type || '',
+    link: notification?.link || '',
+    isRead: Boolean(notification?.isRead),
+    createdAt: notification?.createdAt instanceof Date
+      ? notification.createdAt.toISOString()
+      : notification?.createdAt || ''
+  };
+}
+
+function mapMongoTask(task: any) {
+  return {
+    taskID: String(task?.taskID || task?._id || ''),
+    specialID: task?.specialID || '',
+    taskName: task?.taskName || '',
+    status: task?.status || 'Pending'
+  };
+}
+
+function mapMongoActivity(activity: any) {
+  return {
+    activityID: String(activity?.activityID || activity?._id || ''),
+    taskID: activity?.taskID || '',
+    dateCompleted: activity?.dateCompleted || '',
+    description: activity?.description || ''
+  };
+}
+
+function mapMongoClient(client: any) {
+  return {
+    id: String(client?.clientID || client?._id || ''),
+    name: client?.clientName || '',
+    tin: client?.tin || '',
+    entityType: client?.entityType || '',
+    email: client?.email || '',
+    contactPerson: client?.contactPerson || '',
+    status: client?.status || 'Active',
+    fiscalYearEnd: client?.fiscalYearEnd || ''
+  };
+}
+
+function mapMongoRetainer(retainer: any) {
+  return {
+    id: String(retainer?.retainerID || retainer?._id || ''),
+    clientId: retainer?.clientID || '',
+    serviceType: retainer?.serviceID || '',
+    startDate: retainer?.startDate || '',
+    engagementStatus: retainer?.status || 'Active',
+    assignedStaff: retainer?.assignedStaffID || ''
+  };
+}
+
+function mapMongoSpecial(special: any) {
+  return [
+    String(special?.specialID || special?._id || ''),
+    special?.clientID || '',
+    special?.assignedStaffID || '',
+    special?.serviceID || '',
+    special?.projectTitle || '',
+    special?.startDate || '',
+    special?.endDate || '',
+    special?.status || 'Planning',
+    special?.description || ''
+  ];
+}
+
+function mapMongoService(service: any) {
+  return {
+    id: String(service?.serviceID || service?._id || ''),
+    name: service?.serviceName || '',
+    type: service?.type || ''
+  };
+}
+
+function mapMongoTaxCompliance(tax: any) {
+  return {
+    taxID: String(tax?.taxID || tax?._id || ''),
+    complianceName: tax?.complianceName || '',
+    complianceCode: tax?.complianceCode || '',
+    frequency: tax?.frequency || ''
+  };
+}
+
+function mapMongoDeadline(deadline: any) {
+  return {
+    deadlineID: String(deadline?.deadlineID || deadline?._id || ''),
+    retainerID: deadline?.retainerID || '',
+    serviceID: deadline?.serviceID || '',
+    taxID: deadline?.taxID || '',
+    dueDate: deadline?.dueDate || ''
+  };
+}
+
+function mapMongoRetainerLog(log: any) {
+  return [
+    log?.deadlineID || '',
+    log?.period || '',
+    log?.dateCompleted || '',
+    log?.remarks || ''
+  ];
+}
+
+function mapMongoCredential(credential: any) {
+  return {
+    credentialID: String(credential?.credentialID || credential?._id || ''),
+    clientID: credential?.clientID || '',
+    systemName: credential?.systemName || '',
+    username: credential?.username || '',
+    password: credential?.password || '',
+    securityAnswer: credential?.securityAnswer || '',
+    remarks: credential?.remarks || ''
+  };
+}
+
+function mapMongoTransmittal(transmittal: any) {
+  return {
+    transmittalID: String(transmittal?.transmittalID || transmittal?._id || ''),
+    clientID: transmittal?.clientID || '',
+    userID: transmittal?.userID || '',
+    items: transmittal?.items || '',
+    date: transmittal?.date || '',
+    receiptUrl: transmittal?.receiptUrl || '',
+    receiverName: transmittal?.receiverName || '',
+    receiverAddress: transmittal?.receiverAddress || ''
+  };
+}
+
+function mapMongoMeeting(meeting: any) {
+  return {
+    meetingID: String(meeting?.meetingID || meeting?._id || ''),
+    date: meeting?.date || '',
+    subject: meeting?.subject || '',
+    userIDs: meeting?.userIDs || '',
+    momUrl: meeting?.momUrl || ''
+  };
+}
+
+async function getNextNumericId(collection: any, fieldName: string, width = 4) {
+  const rows = await collection.find({}, { projection: { [fieldName]: 1 } }).toArray();
+  const maxId = rows.reduce((max: number, row: any) => {
+    const id = parseInt(row?.[fieldName], 10);
+    return Number.isNaN(id) ? max : Math.max(max, id);
+  }, 0);
+
+  return String(maxId + 1).padStart(width, '0');
+}
+
+async function getNextTransmittalId(collection: any, dateValue: string) {
+  const transmittalDate = new Date(dateValue);
+  const month = String(transmittalDate.getMonth() + 1).padStart(2, '0');
+  const year = String(transmittalDate.getFullYear()).slice(-2);
+  const prefix = `${month}${year}-TS`;
+  const rows = await collection.find({ transmittalID: { $regex: `^${prefix}` } }, { projection: { transmittalID: 1 } }).toArray();
+  const maxNum = rows.reduce((max: number, row: any) => {
+    const parts = String(row?.transmittalID || '').split('-TS');
+    const num = parts.length > 1 ? parseInt(parts[1], 10) : 0;
+    return Number.isNaN(num) ? max : Math.max(max, num);
+  }, 0);
+
+  return `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
+}
+
+async function getNextPaddedId(collection: any, fieldName: string) {
+  const rows = await collection.find({}, { projection: { [fieldName]: 1 } }).toArray();
+  const maxId = rows.reduce((max: number, row: any) => {
+    const id = parseInt(row?.[fieldName], 10);
+    return Number.isNaN(id) ? max : Math.max(max, id);
+  }, 0);
+
+  return String(maxId + 1).padStart(4, '0');
+}
+
+let mongoIndexPromise: Promise<void> | null = null;
+async function ensureMongoIndexes() {
+  if (!mongoIndexPromise) {
+    mongoIndexPromise = getMongoDb().then(async db => {
+      const createIndex = async (collectionName: string, keys: any) => {
+        try {
+          const collection = db.collection(collectionName);
+          const existingIndexes = await collection.indexes();
+          const hasSameKey = existingIndexes.some((index: any) => JSON.stringify(index.key) === JSON.stringify(keys));
+          if (hasSameKey) return;
+
+          await collection.createIndex(keys);
+        } catch (error: any) {
+          if (
+            error?.codeName === 'IndexOptionsConflict' ||
+            error?.codeName === 'IndexKeySpecsConflict' ||
+            error?.code === 85 ||
+            String(error?.message || '').includes('An existing index has the same name')
+          ) {
+            console.warn(`[Mongo] Reusing existing index for ${collectionName}:`, JSON.stringify(keys));
+            return;
+          }
+          throw error;
+        }
+      };
+
+      await Promise.all([
+        createIndex('users', { userID: 1 }),
+        createIndex('users', { userName: 1 }),
+        createIndex('clients', { clientID: 1 }),
+        createIndex('retainerEngagements', { retainerID: 1 }),
+        createIndex('retainerEngagements', { clientID: 1 }),
+        createIndex('specialEngagements', { specialID: 1 }),
+        createIndex('specialEngagements', { clientID: 1 }),
+        createIndex('deadlines', { deadlineID: 1 }),
+        createIndex('deadlines', { retainerID: 1 }),
+        createIndex('retainerLogs', { deadlineID: 1, period: 1 }),
+        createIndex('taskLogs', { taskID: 1 }),
+        createIndex('taskLogs', { specialID: 1 }),
+        createIndex('activityLogs', { activityID: 1 }),
+        createIndex('activityLogs', { taskID: 1 }),
+        createIndex('credentials', { clientID: 1 }),
+        createIndex('transmittals', { clientID: 1 }),
+        createIndex('meetings', { date: -1 }),
+        createIndex('notifications', { userId: 1, createdAt: -1 }),
+      ]);
+    }).catch(error => {
+      mongoIndexPromise = null;
+      throw error;
+    });
+  }
+
+  return mongoIndexPromise;
 }
 
 // Multer setup using platform-agnostic OS temp directory
@@ -269,53 +571,86 @@ app.get('/api/avatar/:fileId', async (req, res) => {
 
 app.put('/api/users/:id', async (req, res) => {
   const { id } = req.params;
-  const { firstName, lastName, email, avatarUrl } = req.body;
+  const { username, userName, firstName, lastName, email, avatarUrl, role, team, status, password } = req.body;
   
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
+    const db = await getMongoDb();
+    const ids = userIdCandidates(id);
+    const updates: any = { updatedAt: new Date() };
+    const nextUserName = userName ?? username;
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'users!A:J',
-    });
-
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => String(row[0]).trim().replace(/^0+/, '') === id.replace(/^0+/, ''));
-    if (rowIndex === -1) return res.status(404).json({ error: 'User not found' });
-
-    const currentRow = rows[rowIndex];
-    while (currentRow.length < 10) {
-      currentRow.push('');
+    if (nextUserName !== undefined) {
+      const existing = await db.collection<any>('users').findOne({
+        userName: nextUserName,
+        $nor: [{ _id: { $in: ids } }, { userID: { $in: ids } }]
+      });
+      if (existing) return res.status(400).json({ error: 'Username already exists' });
+      updates.userName = nextUserName;
     }
+    if (firstName !== undefined) updates.firstName = firstName;
+    if (lastName !== undefined) updates.lastName = lastName;
+    if (avatarUrl !== undefined) updates.avatarUrl = avatarUrl;
+    if (email !== undefined) updates.email = email;
+    if (role !== undefined) updates.role = role;
+    if (team !== undefined) updates.team = team;
+    if (status !== undefined) updates.status = status;
+    if (password) updates.passwordHash = await bcrypt.hash(password, 10);
 
-    if (firstName !== undefined) currentRow[3] = firstName;
-    if (lastName !== undefined) currentRow[4] = lastName;
-    if (avatarUrl !== undefined) currentRow[8] = avatarUrl;
-    if (email !== undefined) currentRow[9] = email;
+    const result = await db.collection<any>('users').findOneAndUpdate(
+      { $or: [{ _id: { $in: ids } }, { userID: { $in: ids } }] },
+      { $set: updates },
+      { returnDocument: 'after' }
+    );
 
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `users!A${rowIndex + 1}:J${rowIndex + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [currentRow] },
-    });
+    if (!result) return res.status(404).json({ error: 'User not found' });
 
     res.json({ 
       success: true, 
-      user: {
-        id: currentRow[0],
-        username: currentRow[1],
-        firstName: currentRow[3],
-        lastName: currentRow[4],
-        role: currentRow[5],
-        team: currentRow[6],
-        status: currentRow[7],
-        avatarUrl: currentRow[8],
-        email: currentRow[9]
-      }
+      user: mapMongoUser(result)
     });
   } catch (error: any) {
     console.error('[API] Error updating user:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users', async (req, res) => {
+  const { username, userName, password, firstName, lastName, role, team, status, avatarUrl, email } = req.body;
+  const nextUserName = String(userName ?? username ?? '').trim();
+
+  if (!nextUserName || !password || !firstName || !lastName || !role) {
+    return res.status(400).json({ error: 'Username, password, first name, last name, and role are required' });
+  }
+
+  try {
+    const db = await getMongoDb();
+    const usersCollection = db.collection<any>('users');
+    const existing = await usersCollection.findOne({ userName: nextUserName });
+    if (existing) return res.status(400).json({ error: 'Username already exists' });
+
+    const userID = await getNextPaddedId(usersCollection, 'userID');
+    const passwordHash = await bcrypt.hash(password, 10);
+    const now = new Date();
+    const doc = {
+      _id: userID,
+      userID,
+      userName: nextUserName,
+      passwordHash,
+      firstName,
+      lastName,
+      role,
+      team: team || '',
+      status: status || 'Active',
+      avatarUrl: avatarUrl || '',
+      email: email || '',
+      createdAt: now,
+      updatedAt: now
+    };
+
+    await usersCollection.insertOne(doc);
+    res.status(201).json({ success: true, user: mapMongoUser(doc) });
+  } catch (error: any) {
+    console.error('[API] Error creating user:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -324,27 +659,21 @@ app.put('/api/users/:id/password', async (req, res) => {
   const { id } = req.params;
   const { currentPassword, newPassword } = req.body;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
+    const db = await getMongoDb();
+    const ids = userIdCandidates(id);
+    const user = await db.collection<any>('users').findOne({ $or: [{ _id: { $in: ids } }, { userID: { $in: ids } }] });
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'users!A:C',
-    });
-
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => String(row[0]).trim().replace(/^0+/, '') === id.replace(/^0+/, ''));
-    if (rowIndex === -1) return res.status(404).json({ error: 'User not found' });
-
-    const currentRow = rows[rowIndex];
-    if (currentRow[2] !== currentPassword) {
+    const isMatch = !!user.passwordHash && await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isMatch) {
       return res.status(400).json({ error: 'Incorrect current password' });
     }
 
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `users!C${rowIndex + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [[newPassword]] },
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await db.collection<any>('users').updateOne({
+      $or: [{ _id: { $in: ids } }, { userID: { $in: ids } }]
+    }, {
+      $set: { passwordHash, updatedAt: new Date() }
     });
 
     res.json({ success: true });
@@ -357,6 +686,23 @@ app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   
   try {
+    try {
+      const db = await getMongoDb();
+      const mongoUser = await db.collection<any>('users').findOne({ userName: username });
+
+      if (mongoUser?.passwordHash) {
+        const isMatch = await bcrypt.compare(password, mongoUser.passwordHash);
+
+        if (isMatch) {
+          const userId = mongoUser.userID || mongoUser._id;
+          res.cookie('user_id', userId, { httpOnly: true, secure: true, sameSite: 'none' });
+          return res.json(mapMongoUser(mongoUser));
+        }
+      }
+    } catch (mongoError: any) {
+      console.warn('Mongo login unavailable, falling back to Google Sheets:', mongoError.message);
+    }
+
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID!,
       range: 'users!A2:J',
@@ -391,118 +737,113 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/data', async (req, res) => {
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
+    const startedAt = Date.now();
 
-    const ranges = [
-      'retainerEngagements!A2:H', 'specialEngagements!A2:I', 'taxCompliances!A2:H',
-      'users!A2:J', 'clients!A2:H', 'services!A2:C', 'deadline!A2:E',
-      'retainerLog!A2:D', 'taskLog!A2:D', 'activityLog!A2:D', 'credentials!A2:G',
-      'transmittals!A2:H', 'meetings!A2:E', 'notifications!A2:H'
-    ];
+    const db = await getMongoDb();
 
-    const response = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId: SPREADSHEET_ID,
-      ranges,
-    });
+    const [
+      users,
+      clients,
+      retainers,
+      specials,
+      services,
+      taxCompliances,
+      deadlines,
+      retainerLogs,
+      recentActivityDocs,
+      credentials,
+      transmittals,
+      meetings
+    ] = await Promise.all([
+      db.collection<any>('users')
+        .find({}, { projection: { password: 0, passwordHash: 0 } })
+        .sort({ _id: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoUser)),
+      db.collection<any>('clients')
+        .find({}, { projection: { clientID: 1, clientName: 1, tin: 1, entityType: 1, email: 1, contactPerson: 1, status: 1, fiscalYearEnd: 1 } })
+        .sort({ clientID: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoClient)),
+      db.collection<any>('retainerEngagements')
+        .find({}, { projection: { retainerID: 1, clientID: 1, serviceID: 1, startDate: 1, status: 1, assignedStaffID: 1 } })
+        .sort({ retainerID: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoRetainer)),
+      db.collection<any>('specialEngagements')
+        .find({}, { projection: { specialID: 1, clientID: 1, assignedStaffID: 1, serviceID: 1, projectTitle: 1, startDate: 1, endDate: 1, status: 1, description: 1 } })
+        .sort({ specialID: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoSpecial)),
+      db.collection<any>('services')
+        .find({}, { projection: { serviceID: 1, serviceName: 1, type: 1 } })
+        .sort({ serviceID: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoService)),
+      db.collection<any>('taxCompliances')
+        .find({}, { projection: { taxID: 1, complianceName: 1, complianceCode: 1, frequency: 1 } })
+        .sort({ taxID: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoTaxCompliance)),
+      db.collection<any>('deadlines')
+        .find({}, { projection: { deadlineID: 1, retainerID: 1, serviceID: 1, taxID: 1, dueDate: 1 } })
+        .sort({ deadlineID: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoDeadline)),
+      db.collection<any>('retainerLogs')
+        .find({}, { projection: { deadlineID: 1, period: 1, dateCompleted: 1, remarks: 1 } })
+        .sort({ deadlineID: 1, period: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoRetainerLog)),
+      db.collection<any>('activityLogs')
+        .find({}, { projection: { activityID: 1, taskID: 1, dateCompleted: 1, description: 1 } })
+        .sort({ activityID: -1 })
+        .limit(50)
+        .toArray(),
+      db.collection<any>('credentials')
+        .find({}, { projection: { credentialID: 1, clientID: 1, systemName: 1, username: 1, password: 1, securityAnswer: 1, remarks: 1 } })
+        .sort({ credentialID: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoCredential)),
+      db.collection<any>('transmittals')
+        .find({}, { projection: { transmittalID: 1, clientID: 1, userID: 1, items: 1, date: 1, receiptUrl: 1, receiverName: 1, receiverAddress: 1 } })
+        .sort({ date: -1, transmittalID: -1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoTransmittal)),
+      db.collection<any>('meetings')
+        .find({}, { projection: { meetingID: 1, date: 1, subject: 1, userIDs: 1, momUrl: 1 } })
+        .sort({ date: -1, meetingID: -1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoMeeting))
+    ]);
 
-    const valueRanges = response.data.valueRanges || [];
-    const data: any = {};
-    ranges.forEach((range, i) => {
-      const key = range.split('!')[0];
-      data[key] = valueRanges[i]?.values || [];
-    });
-
-    const users = data.users.map((row: any[]) => ({
-      id: row[0] || '',
-      username: row[1] || '',
-      firstName: row[3] || '',
-      lastName: row[4] || '',
-      role: row[5] || '',
-      team: row[6] || '',
-      status: row[7] || '',
-      avatarUrl: normalizeAvatarUrl(row[8] || ''),
-      email: row[9] || ''
-    }));
-
-    const retainers = data.retainerEngagements.map((row: any[]) => ({
-      id: row[0] || '',
-      clientId: row[1] || '',
-      serviceType: row[2] || '',
-      startDate: row[3] || '',
-      engagementStatus: row[4] || 'Active',
-      assignedStaff: row[5] || ''
-    }));
-
-    const clients = data.clients.map((row: any[]) => ({
-      id: row[0] || '',
-      name: row[1] || '',
-      tin: row[2] || '',
-      entityType: row[3] || '',
-      email: row[4] || '',
-      contactPerson: row[5] || '',
-      status: row[6] || 'Active',
-      fiscalYearEnd: row[7] || ''
-    }));
-
-    const services = data.services.map((row: any[]) => ({
-      id: row[0] || '',
-      name: row[1] || '',
-      type: row[2] || ''
-    }));
+    const recentTaskIds = Array.from(new Set(recentActivityDocs.map(activity => activity.taskID).filter(Boolean)));
+    const recentTaskDocs = recentTaskIds.length > 0
+      ? await db.collection<any>('taskLogs')
+        .find({ taskID: { $in: recentTaskIds } }, { projection: { taskID: 1, specialID: 1, taskName: 1, status: 1 } })
+        .toArray()
+      : [];
+    const taskLog = recentTaskDocs.map(mapMongoTask);
+    const activityLog = recentActivityDocs.map(mapMongoActivity);
 
     res.json({
       retainers,
-      specials: data.specialEngagements.map((row: any[]) => {
-        const padded = [...row];
-        while (padded.length < 9) padded.push('');
-        return padded;
-      }),
-      taxCompliances: data.taxCompliances,
-      deadlines: data.deadline,
+      specials,
+      taxCompliances,
+      deadlines,
       users,
       clients,
       services,
-      retainerLogs: data.retainerLog,
-      taskLog: data.taskLog,
-      activityLog: data.activityLog,
-      credentials: data.credentials.map((row: any[]) => ({
-        credentialID: row[0] || '',
-        clientID: row[1] || '',
-        systemName: row[2] || '',
-        username: row[3] || '',
-        password: row[4] || '',
-        securityAnswer: row[5] || '',
-        remarks: row[6] || ''
-      })),
-      transmittals: data.transmittals.map((row: any[]) => ({
-        transmittalID: row[0] || '',
-        clientID: row[1] || '',
-        userID: row[2] || '',
-        items: row[3] || '',
-        date: row[4] || '',
-        receiptUrl: row[5] || '',
-        receiverName: row[6] || '',
-        receiverAddress: row[7] || ''
-      })),
-      meetings: data.meetings.map((row: any[]) => ({
-        meetingID: row[0] || '',
-        date: row[1] || '',
-        subject: row[2] || '',
-        userIDs: row[3] || '',
-        momUrl: row[4] || ''
-      })),
-      notifications: data.notifications ? data.notifications.map((row: any[]) => ({
-        id: row[0] || '',
-        userId: row[1] || '',
-        title: row[2] || '',
-        message: row[3] || '',
-        type: row[4] || '',
-        link: row[5] || '',
-        isRead: String(row[6]).toUpperCase() === 'TRUE',
-        createdAt: row[7] || ''
-      })) : [],
+      retainerLogs,
+      taskLog,
+      activityLog,
+      credentials,
+      transmittals,
+      meetings,
+      notifications: [],
       deliverables: []
     });
+    console.log(`[API /api/data] Loaded in ${Date.now() - startedAt}ms`);
   } catch (error: any) {
     console.error('API /api/data error:', error.message);
     res.status(500).json({ error: error.message });
@@ -510,18 +851,47 @@ app.get('/api/data', async (req, res) => {
 });
 
 // --- Notifications Endpoints ---
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const userId = String(req.query.userId || '').trim();
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 100);
+
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+    const db = await getMongoDb();
+    const notifications = await db.collection<any>('notifications')
+      .find(
+        { userId },
+        { projection: { userId: 1, title: 1, message: 1, type: 1, link: 1, isRead: 1, createdAt: 1 } }
+      )
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray()
+      .then(rows => rows.map(mapMongoNotification));
+
+    res.json(notifications);
+  } catch (error: any) {
+    console.error('API GET /api/notifications error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/notifications', async (req, res) => {
   try {
     const data = req.body;
     const id = crypto.randomUUID();
-    const createdAt = new Date().toISOString();
-    const row = [id, data.userId, data.title, data.message, data.type, data.link, 'FALSE', createdAt];
+    const createdAt = new Date();
+    const db = await getMongoDb();
 
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID!,
-      range: 'notifications!A:H',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] },
+    await db.collection<any>('notifications').insertOne({
+      _id: id,
+      userId: data.userId || '',
+      title: data.title || '',
+      message: data.message || '',
+      type: data.type || '',
+      link: data.link || '',
+      isRead: false,
+      createdAt,
     });
     res.json({ success: true, id });
   } catch (error: any) {
@@ -533,21 +903,13 @@ app.post('/api/notifications', async (req, res) => {
 app.post('/api/notifications/read', async (req, res) => {
   try {
     const { id } = req.body;
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID!,
-      range: 'notifications!A2:H',
-    });
-    const rows = response.data.values || [];
-    const index = rows.findIndex((row: any) => row[0] === id);
-    
-    if (index !== -1) {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID!,
-        range: `notifications!G${index + 2}`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [['TRUE']] },
-      });
-    }
+    const db = await getMongoDb();
+
+    await db.collection<any>('notifications').updateOne(
+      { _id: id },
+      { $set: { isRead: true, readAt: new Date() } }
+    );
+
     res.json({ success: true });
   } catch (error: any) {
     console.error('API /api/notifications/read error:', error);
@@ -558,32 +920,13 @@ app.post('/api/notifications/read', async (req, res) => {
 app.post('/api/notifications/read-all', async (req, res) => {
   try {
     const { userId } = req.body;
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID!,
-      range: 'notifications!A2:H',
-    });
-    const rows = response.data.values || [];
-    const updates = [];
-    
-    for (let i = 0; i < rows.length; i++) {
-      if (rows[i][1] === userId && String(rows[i][6]).toUpperCase() !== 'TRUE') {
-        updates.push({
-          range: `notifications!G${i + 2}`,
-          values: [['TRUE']]
-        });
-      }
-    }
+    const db = await getMongoDb();
+    const result = await db.collection<any>('notifications').updateMany(
+      { userId, isRead: { $ne: true } },
+      { $set: { isRead: true, readAt: new Date() } }
+    );
 
-    if (updates.length > 0) {
-      await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: SPREADSHEET_ID!,
-        requestBody: {
-          valueInputOption: 'USER_ENTERED',
-          data: updates
-        }
-      });
-    }
-    res.json({ success: true });
+    res.json({ success: true, modifiedCount: result.modifiedCount });
   } catch (error: any) {
     console.error('API /api/notifications/read-all error:', error);
     res.status(500).json({ error: error.message });
@@ -597,51 +940,23 @@ app.post('/api/logout', (req, res) => {
 
 app.post('/api/transmittals', async (req, res) => {
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
     const data = req.body;
-    const transmittalDate = new Date(data.date);
-    
-    const month = String(transmittalDate.getMonth() + 1).padStart(2, '0');
-    const year = String(transmittalDate.getFullYear()).slice(-2);
-    const prefix = `${month}${year}-TS`;
+    const db = await getMongoDb();
+    const collection = db.collection<any>('transmittals');
+    const nextId = await getNextTransmittalId(collection, data.date);
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'transmittals!A2:A',
-    });
-    const rows = response.data.values || [];
-    
-    const monthIds = rows
-      .map(row => String(row[0] || ''))
-      .filter(id => id.startsWith(prefix));
-
-    let nextNum = 1;
-    if (monthIds.length > 0) {
-      const numbers = monthIds.map(id => {
-        const parts = id.split('-TS');
-        return parts.length > 1 ? parseInt(parts[1], 10) : 0;
-      });
-      nextNum = Math.max(...numbers) + 1;
-    }
-
-    const nextId = `${prefix}${nextNum.toString().padStart(4, '0')}`;
-
-    const row = [
-      nextId,
-      data.clientID,
-      data.userID,
-      data.items,
-      data.date,
-      data.receiptUrl || '',
-      data.receiverName || '',
-      data.receiverAddress || ''
-    ];
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'transmittals!A2',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] },
+    await collection.insertOne({
+      _id: nextId,
+      transmittalID: nextId,
+      clientID: data.clientID || '',
+      userID: data.userID || '',
+      items: data.items || '',
+      date: data.date || '',
+      receiptUrl: data.receiptUrl || '',
+      receiverName: data.receiverName || '',
+      receiverAddress: data.receiverAddress || '',
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
 
     res.json({ success: true, transmittalID: nextId });
@@ -653,29 +968,20 @@ app.post('/api/transmittals', async (req, res) => {
 
 app.post('/api/meetings', async (req, res) => {
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
     const data = req.body;
+    const db = await getMongoDb();
+    const collection = db.collection<any>('meetings');
+    const nextId = await getNextNumericId(collection, 'meetingID');
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'meetings!A2:A',
-    });
-    const rows = response.data.values || [];
-    const nextId = (rows.length + 1).toString().padStart(4, '0');
-
-    const row = [
-      nextId,
-      data.date,
-      data.subject,
-      data.userIDs,
-      data.momUrl
-    ];
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'meetings!A2',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] },
+    await collection.insertOne({
+      _id: nextId,
+      meetingID: nextId,
+      date: data.date || '',
+      subject: data.subject || '',
+      userIDs: data.userIDs || '',
+      momUrl: data.momUrl || '',
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
 
     res.json({ success: true, meetingID: nextId });
@@ -688,22 +994,23 @@ app.put('/api/transmittals/:id', async (req, res) => {
   const { id } = req.params;
   const data = req.body;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'transmittals!A:A',
-    });
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => String(row[0]) === String(id));
-    if (rowIndex === -1) return res.status(404).json({ error: 'Transmittal not found' });
-
-    const row = [id, data.clientID, data.userID, data.items, data.date, data.receiptUrl || '', data.receiverName || '', data.receiverAddress || ''];
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `transmittals!A${rowIndex + 1}:H${rowIndex + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] },
-    });
+    const db = await getMongoDb();
+    const result = await db.collection<any>('transmittals').updateOne(
+      { _id: id },
+      {
+        $set: {
+          clientID: data.clientID || '',
+          userID: data.userID || '',
+          items: data.items || '',
+          date: data.date || '',
+          receiptUrl: data.receiptUrl || '',
+          receiverName: data.receiverName || '',
+          receiverAddress: data.receiverAddress || '',
+          updatedAt: new Date()
+        }
+      }
+    );
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Transmittal not found' });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -714,22 +1021,20 @@ app.put('/api/meetings/:id', async (req, res) => {
   const { id } = req.params;
   const data = req.body;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'meetings!A:A',
-    });
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => String(row[0]) === String(id));
-    if (rowIndex === -1) return res.status(404).json({ error: 'Meeting not found' });
-
-    const row = [id, data.date, data.subject, data.userIDs, data.momUrl];
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `meetings!A${rowIndex + 1}:E${rowIndex + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] },
-    });
+    const db = await getMongoDb();
+    const result = await db.collection<any>('meetings').updateOne(
+      { _id: id },
+      {
+        $set: {
+          date: data.date || '',
+          subject: data.subject || '',
+          userIDs: data.userIDs || '',
+          momUrl: data.momUrl || '',
+          updatedAt: new Date()
+        }
+      }
+    );
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Meeting not found' });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -739,54 +1044,25 @@ app.put('/api/meetings/:id', async (req, res) => {
 app.post('/api/clients', async (req, res) => {
   console.log('[API] Received request to add client:', req.body.name);
   try {
-    if (!SPREADSHEET_ID) {
-      throw new Error('GOOGLE_SHEET_ID is not configured');
-    }
-
+    const db = await getMongoDb();
+    const collection = db.collection<any>('clients');
     const client = req.body;
-    
-    console.log('[Sheets API] Fetching current IDs...');
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'clients!A2:A',
-    });
-    
-    const rows = response.data.values || [];
-    let nextIdNum = 1;
-    
-    if (rows.length > 0) {
-      const numericIds = rows
-        .map(row => row[0])
-        .filter(id => id && !isNaN(parseInt(String(id), 10)))
-        .map(id => parseInt(String(id), 10));
-        
-      if (numericIds.length > 0) {
-        nextIdNum = Math.max(...numericIds) + 1;
-      }
-    }
-    
-    const nextId = nextIdNum.toString().padStart(4, '0');
-    console.log('[API] Generated next ID:', nextId);
-    
-    const row = [
-      nextId,
-      client.name || '',
-      client.tin || '',
-      client.entityType || '',
-      client.email || '',
-      client.contactPerson || '',
-      client.status || 'Active',
-      client.fiscalYearEnd || ''
-    ];
 
-    console.log('[Sheets API] Appending row...');
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'clients!A2',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [row],
-      },
+    const nextId = await getNextPaddedId(collection, 'clientID');
+    console.log('[API] Generated next ID:', nextId);
+
+    await collection.insertOne({
+      _id: nextId,
+      clientID: nextId,
+      clientName: client.name || '',
+      tin: client.tin || '',
+      entityType: client.entityType || '',
+      email: client.email || '',
+      contactPerson: client.contactPerson || '',
+      status: client.status || 'Active',
+      fiscalYearEnd: client.fiscalYearEnd || '',
+      createdAt: new Date(),
+      updatedAt: new Date(),
     });
 
     console.log('[API] Successfully added client:', nextId);
@@ -808,44 +1084,25 @@ app.put('/api/clients/:id', async (req, res) => {
   console.log(`[API] Update request for client ${id}:`, JSON.stringify(updatedClient));
   
   try {
-    if (!SPREADSHEET_ID) {
-      throw new Error('GOOGLE_SHEET_ID is not configured');
-    }
+    const db = await getMongoDb();
+    const ids = userIdCandidates(id);
+    const result = await db.collection<any>('clients').updateOne(
+      { $or: [{ _id: { $in: ids } }, { clientID: { $in: ids } }] },
+      {
+        $set: {
+          clientName: updatedClient.name || '',
+          tin: updatedClient.tin || '',
+          entityType: updatedClient.entityType || updatedClient.entity_type || '',
+          email: updatedClient.email || '',
+          contactPerson: updatedClient.contactPerson || '',
+          status: updatedClient.status || 'Active',
+          fiscalYearEnd: updatedClient.fiscalYearEnd || '',
+          updatedAt: new Date(),
+        }
+      }
+    );
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'clients!A:A',
-    });
-    
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => String(row[0]).trim().replace(/^0+/, '') === String(id).trim().replace(/^0+/, ''));
-    
-    if (rowIndex === -1) {
-      console.error(`[API] Client ${id} not found in sheet`);
-      return res.status(404).json({ error: 'Client not found' });
-    }
-
-    const row = [
-      id.padStart(4, '0'),
-      updatedClient.name || '',
-      updatedClient.tin || '',
-      updatedClient.entityType || updatedClient.entity_type || '',
-      updatedClient.email || '',
-      updatedClient.contactPerson || '',
-      updatedClient.status || 'Active',
-      updatedClient.fiscalYearEnd || ''
-    ];
-
-    console.log(`[API] Writing row to sheet at index ${rowIndex + 1}:`, JSON.stringify(row));
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `clients!A${rowIndex + 1}:H${rowIndex + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [row],
-      },
-    });
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Client not found' });
 
     console.log('[API] Successfully updated client:', id);
     return res.status(200).json({ success: true });
@@ -862,84 +1119,58 @@ app.put('/api/retainers/:id', async (req, res) => {
   console.log(`[API] Updating retainer: ${id} for client: ${clientId}`);
 
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
+    const db = await getMongoDb();
+    const ids = userIdCandidates(id);
+    const retainerId = ids[2];
 
-    const rResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'retainerEngagements!A:F',
-    });
-    const rRows = rResponse.data.values || [];
-    const rowIndex = rRows.findIndex(r => String(r[0]).trim().replace(/^0+/, '') === id.replace(/^0+/, ''));
-    
-    if (rowIndex === -1) return res.status(404).json({ error: 'Retainer not found' });
+    const result = await db.collection<any>('retainerEngagements').updateOne(
+      { $or: [{ _id: { $in: ids } }, { retainerID: { $in: ids } }] },
+      {
+        $set: {
+          clientID: clientId,
+          serviceID: serviceId,
+          startDate,
+          status: 'Active',
+          assignedStaffID: assignedStaffId,
+          updatedAt: new Date(),
+        }
+      }
+    );
 
-    const updatedRow = [id, clientId, serviceId, startDate, 'Active', assignedStaffId];
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `retainerEngagements!A${rowIndex + 1}:F${rowIndex + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [updatedRow] }
-    });
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Retainer not found' });
 
-    const dlResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'deadline!A:E',
-    });
-    const dlRows = dlResponse.data.values || [];
-    
-    const filteredDeadlines = dlRows.filter((r, idx) => {
-      if (idx === 0) return true;
-      return String(r[1]).trim().replace(/^0+/, '') !== id.replace(/^0+/, '');
-    });
-
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'deadline!A:E',
-    });
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'deadline!A1',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: filteredDeadlines }
-    });
-
-    const newDlResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'deadline!A2:A',
-    });
-    const newDlRows = newDlResponse.data.values || [];
-    let nextDlIdNum = 1;
-    if (newDlRows.length > 0) {
-      const dlIds = newDlRows.map(r => r[0]).filter(id => id && !isNaN(parseInt(id, 10))).map(id => parseInt(id, 10));
-      if (dlIds.length > 0) nextDlIdNum = Math.max(...dlIds) + 1;
-    }
+    await db.collection<any>('deadlines').deleteMany({ retainerID: { $in: ids } });
+    let nextDlIdNum = parseInt(await getNextPaddedId(db.collection<any>('deadlines'), 'deadlineID'), 10);
 
     let deadlineRows = [];
     if (serviceId === '0001' && selectedTaxes && selectedTaxes.length > 0) {
-      deadlineRows = selectedTaxes.map((tax: any, idx: number) => [
-        (nextDlIdNum + idx).toString().padStart(4, '0'),
-        id,
-        serviceId,
-        tax.taxID,
-        tax.dueDateCode
-      ]);
+      deadlineRows = selectedTaxes.map((tax: any, idx: number) => ({
+        _id: (nextDlIdNum + idx).toString().padStart(4, '0'),
+        deadlineID: (nextDlIdNum + idx).toString().padStart(4, '0'),
+        retainerID: retainerId,
+        serviceID: serviceId,
+        taxID: tax.taxID,
+        dueDate: tax.dueDateCode,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
     } else if (dueDateCode) {
-      deadlineRows = [[
-        nextDlIdNum.toString().padStart(4, '0'),
-        id,
+      const deadlineID = nextDlIdNum.toString().padStart(4, '0');
+      deadlineRows = [{
+        _id: deadlineID,
+        deadlineID,
+        retainerID: retainerId,
         serviceId,
-        '',
-        dueDateCode
-      ]];
+        serviceID: serviceId,
+        taxID: '',
+        dueDate: dueDateCode,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }];
     }
 
     if (deadlineRows.length > 0) {
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'deadline!A2',
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: deadlineRows }
-      });
+      await db.collection<any>('deadlines').insertMany(deadlineRows);
     }
 
     console.log('[API] Successfully updated retainer and deadlines:', id);
@@ -955,49 +1186,14 @@ app.delete('/api/retainers/:id', async (req, res) => {
   console.log(`[API] Deleting retainer: ${id}`);
 
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
+    const db = await getMongoDb();
+    const ids = userIdCandidates(id);
+    const result = await db.collection<any>('retainerEngagements').deleteOne({
+      $or: [{ _id: { $in: ids } }, { retainerID: { $in: ids } }]
+    });
+    await db.collection<any>('deadlines').deleteMany({ retainerID: { $in: ids } });
 
-    const rResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'retainerEngagements!A:F',
-    });
-    const rRows = rResponse.data.values || [];
-    const filteredRetainers = rRows.filter((r, idx) => {
-      if (idx === 0) return true;
-      return String(r[0]).trim().replace(/^0+/, '') !== id.replace(/^0+/, '');
-    });
-
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'retainerEngagements!A:F',
-    });
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'retainerEngagements!A1',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: filteredRetainers }
-    });
-
-    const dlResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'deadline!A:E',
-    });
-    const dlRows = dlResponse.data.values || [];
-    const filteredDeadlines = dlRows.filter((r, idx) => {
-      if (idx === 0) return true;
-      return String(r[1]).trim().replace(/^0+/, '') !== id.replace(/^0+/, '');
-    });
-
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'deadline!A:E',
-    });
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'deadline!A1',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: filteredDeadlines }
-    });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Retainer not found' });
 
     console.log('[API] Successfully deleted retainer and deadlines:', id);
     return res.status(200).json({ success: true });
@@ -1013,72 +1209,64 @@ app.post('/api/retainers', async (req, res) => {
   console.log('[API] Modular assignment for client:', clientId, 'Count:', assignments?.length);
 
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-
+    const db = await getMongoDb();
+    const retainerCollection = db.collection<any>('retainerEngagements');
+    const deadlineCollection = db.collection<any>('deadlines');
     const results = [];
+    let nextRetainerIdNum = parseInt(await getNextPaddedId(retainerCollection, 'retainerID'), 10);
+    let nextDeadlineIdNum = parseInt(await getNextPaddedId(deadlineCollection, 'deadlineID'), 10);
 
     for (const task of assignments) {
       const { serviceId, assignedStaffId, startDate, dueDateCode, selectedTaxes } = task;
 
-      const response = await sheets.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'retainerEngagements!A2:A',
-      });
-      const rows = response.data.values || [];
-      let nextIdNum = 1;
-      if (rows.length > 0) {
-        const numericIds = rows.map(r => r[0]).filter(id => id && !isNaN(parseInt(id, 10))).map(id => parseInt(id, 10));
-        if (numericIds.length > 0) nextIdNum = Math.max(...numericIds) + 1;
-      }
-      const retainerId = nextIdNum.toString().padStart(4, '0');
+      const retainerId = String(nextRetainerIdNum++).padStart(4, '0');
 
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'retainerEngagements!A2',
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [[retainerId, clientId, serviceId, startDate, 'Active', assignedStaffId]] }
+      await retainerCollection.insertOne({
+        _id: retainerId,
+        retainerID: retainerId,
+        clientID: clientId,
+        serviceID: serviceId,
+        startDate,
+        status: 'Active',
+        assignedStaffID: assignedStaffId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       });
 
       console.log('[API] Adding deadlines for retainer:', retainerId, 'Service:', serviceId);
-      
-      const dlResponse = await sheets.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'deadline!A2:A',
-      });
-      const dlRows = dlResponse.data.values || [];
-      let nextDlIdNum = 1;
-      if (dlRows.length > 0) {
-        const dlIds = dlRows.map(r => r[0]).filter(id => id && !isNaN(parseInt(id, 10))).map(id => parseInt(id, 10));
-        if (dlIds.length > 0) nextDlIdNum = Math.max(...dlIds) + 1;
-      }
 
       let deadlineRows = [];
 
       if (serviceId === '0001' && selectedTaxes && selectedTaxes.length > 0) {
-        deadlineRows = selectedTaxes.map((tax: any, idx: number) => [
-          (nextDlIdNum + idx).toString().padStart(4, '0'),
-          retainerId,
-          serviceId,
-          tax.taxID,
-          tax.dueDateCode
-        ]);
+        deadlineRows = selectedTaxes.map((tax: any) => {
+          const deadlineID = String(nextDeadlineIdNum++).padStart(4, '0');
+          return {
+            _id: deadlineID,
+            deadlineID,
+            retainerID: retainerId,
+            serviceID: serviceId,
+            taxID: tax.taxID,
+            dueDate: tax.dueDateCode,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+        });
       } else if (dueDateCode) {
-        deadlineRows = [[
-          nextDlIdNum.toString().padStart(4, '0'),
-          retainerId,
-          serviceId,
-          '',
-          dueDateCode
-        ]];
+        const deadlineID = String(nextDeadlineIdNum++).padStart(4, '0');
+        deadlineRows = [{
+          _id: deadlineID,
+          deadlineID,
+          retainerID: retainerId,
+          serviceID: serviceId,
+          taxID: '',
+          dueDate: dueDateCode,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }];
       }
 
       if (deadlineRows.length > 0) {
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: SPREADSHEET_ID,
-          range: 'deadline!A2',
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: deadlineRows }
-        });
+        await deadlineCollection.insertMany(deadlineRows);
       }
       
       results.push({ retainerId, serviceId });
@@ -1104,39 +1292,27 @@ app.post('/api/specials', async (req, res) => {
   console.log('[API] Special project assignment for client:', clientId);
 
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-
+    const db = await getMongoDb();
+    const collection = db.collection<any>('specialEngagements');
     const results = [];
+    let nextIdNum = parseInt(await getNextPaddedId(collection, 'specialID'), 10);
+
     for (const task of assignments) {
-      const response = await sheets.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'specialEngagements!A2:A',
-      });
-      const rows = response.data.values || [];
-      let nextIdNum = 1;
-      if (rows.length > 0) {
-        const numericIds = rows.map(r => r[0]).filter(id => id && !isNaN(parseInt(id, 10))).map(id => parseInt(id, 10));
-        if (numericIds.length > 0) nextIdNum = Math.max(...numericIds) + 1;
-      }
-      const specialId = nextIdNum.toString().padStart(4, '0');
+      const specialId = String(nextIdNum++).padStart(4, '0');
 
-      const row = [
-        specialId,
-        String(clientId).padStart(4, '0'),
-        String(task.assignedStaffId).padStart(4, '0'),
-        String(task.serviceId).padStart(4, '0'),
-        task.projectTitle || '',
-        formatDateToMDY(task.startDate) || '',
-        formatDateToMDY(task.endDate) || '',
-        task.status || 'Planning',
-        task.description || ''
-      ];
-
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'specialEngagements!A2',
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [row] }
+      await collection.insertOne({
+        _id: specialId,
+        specialID: specialId,
+        clientID: String(clientId).padStart(4, '0'),
+        assignedStaffID: String(task.assignedStaffId).padStart(4, '0'),
+        serviceID: String(task.serviceId).padStart(4, '0'),
+        projectTitle: task.projectTitle || '',
+        startDate: formatDateToMDY(task.startDate) || '',
+        endDate: formatDateToMDY(task.endDate) || '',
+        status: task.status || 'Planning',
+        description: task.description || '',
+        createdAt: new Date(),
+        updatedAt: new Date(),
       });
       
       results.push({ specialId });
@@ -1155,44 +1331,23 @@ app.put('/api/specials/:id', async (req, res) => {
   console.log(`[API] Updating special engagement: ${id}`);
 
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
+    const db = await getMongoDb();
+    const ids = userIdCandidates(id);
+    const updates: any = { updatedAt: new Date() };
+    if (data.assignedStaffId !== undefined) updates.assignedStaffID = String(data.assignedStaffId).padStart(4, '0');
+    if (data.serviceId !== undefined) updates.serviceID = String(data.serviceId).padStart(4, '0');
+    if (data.projectTitle !== undefined) updates.projectTitle = data.projectTitle;
+    if (data.startDate !== undefined) updates.startDate = formatDateToMDY(data.startDate);
+    if (data.endDate !== undefined) updates.endDate = formatDateToMDY(data.endDate);
+    if (data.status !== undefined) updates.status = data.status;
+    if (data.description !== undefined) updates.description = data.description;
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'specialEngagements!A:I',
-    });
+    const result = await db.collection<any>('specialEngagements').updateOne(
+      { $or: [{ _id: { $in: ids } }, { specialID: { $in: ids } }] },
+      { $set: updates }
+    );
 
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(r => String(r[0]).trim().replace(/^0+/, '') === id.replace(/^0+/, ''));
-
-    if (rowIndex === -1) {
-      return res.status(404).json({ error: 'Special engagement not found' });
-    }
-
-    const currentRow = rows[rowIndex];
-    const updatedRow = [...currentRow];
-    
-    if (data.assignedStaffId !== undefined) updatedRow[2] = String(data.assignedStaffId).padStart(4, '0');
-    if (data.serviceId !== undefined) updatedRow[3] = String(data.serviceId).padStart(4, '0');
-    if (data.projectTitle !== undefined) updatedRow[4] = data.projectTitle;
-    if (data.startDate !== undefined) updatedRow[5] = formatDateToMDY(data.startDate);
-    if (data.endDate !== undefined) updatedRow[6] = formatDateToMDY(data.endDate);
-    if (data.status !== undefined) updatedRow[7] = data.status;
-    if (data.description !== undefined) updatedRow[8] = data.description;
-    
-    updatedRow[0] = String(updatedRow[0] || '').padStart(4, '0');
-    updatedRow[1] = String(updatedRow[1] || '').padStart(4, '0');
-
-    while (updatedRow.length < 9) updatedRow.push('');
-
-    console.log('[API] Final updatedRow to be sent:', updatedRow);
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `specialEngagements!A${rowIndex + 1}:I${rowIndex + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [updatedRow] }
-    });
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Special engagement not found' });
 
     console.log('[API] Successfully updated special engagement:', id);
     return res.status(200).json({ success: true });
@@ -1207,30 +1362,22 @@ app.delete('/api/specials/:id', async (req, res) => {
   console.log(`[API] Deleting special engagement: ${id}`);
 
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
+    const db = await getMongoDb();
+    const ids = userIdCandidates(id);
+    const taskDocs = await db.collection<any>('taskLogs')
+      .find({ specialID: { $in: ids } }, { projection: { taskID: 1 } })
+      .toArray();
+    const taskIds = taskDocs.map(task => task.taskID).filter(Boolean);
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'specialEngagements!A:I',
+    const result = await db.collection<any>('specialEngagements').deleteOne({
+      $or: [{ _id: { $in: ids } }, { specialID: { $in: ids } }]
     });
+    await db.collection<any>('taskLogs').deleteMany({ specialID: { $in: ids } });
+    if (taskIds.length > 0) {
+      await db.collection<any>('activityLogs').deleteMany({ taskID: { $in: taskIds } });
+    }
 
-    const rows = response.data.values || [];
-    const filteredRows = rows.filter((r, idx) => {
-      if (idx === 0) return true;
-      return String(r[0]).trim().replace(/^0+/, '') !== id.replace(/^0+/, '');
-    });
-
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'specialEngagements!A:I',
-    });
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'specialEngagements!A1',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: filteredRows }
-    });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Special engagement not found' });
 
     console.log('[API] Successfully deleted special engagement:', id);
     return res.status(200).json({ success: true });
@@ -1245,16 +1392,27 @@ app.post('/api/retainer-logs', async (req, res) => {
   console.log('[API] Adding retainer log:', deadline, period, dateCompleted, remarks);
 
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
+    const db = await getMongoDb();
+    const deadlineID = String(deadline).padStart(4, '0');
+    const id = `${deadlineID}-${String(period).replace(/[^\d]/g, '')}`;
 
-    const row = [deadline, period, dateCompleted, remarks || ''];
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'retainerLog!A2',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] }
-    });
+    await db.collection<any>('retainerLogs').updateOne(
+      { deadlineID, period },
+      {
+        $set: {
+          deadlineID,
+          period,
+          dateCompleted,
+          remarks: remarks || '',
+          updatedAt: new Date(),
+        },
+        $setOnInsert: {
+          _id: id,
+          createdAt: new Date(),
+        }
+      },
+      { upsert: true }
+    );
 
     console.log('[API] Successfully added retainer log for deadline:', deadline);
     return res.status(200).json({ success: true });
@@ -1269,39 +1427,22 @@ app.put('/api/retainer-logs', async (req, res) => {
   console.log('[API] Updating retainer log:', deadline, period, dateCompleted, remarks);
 
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'retainerLog!A:B',
-    });
-    
-    const rows = response.data.values || [];
-    console.log(`[API] Found ${rows.length} rows in retainerLog`);
-    
-    const rowIndex = rows.findIndex((row, idx) => {
-      const matchId = String(row[0] || '').trim().replace(/^0+/, '') === String(deadline).trim().replace(/^0+/, '');
-      const matchPeriod = String(row[1] || '').trim() === String(period).trim();
-      if (matchId) {
-        console.log(`[API] Row ${idx} ID match: ${row[0]} vs ${deadline}, Period match: ${row[1]} vs ${period} -> ${matchPeriod}`);
+    const db = await getMongoDb();
+    const ids = userIdCandidates(deadline);
+    const result = await db.collection<any>('retainerLogs').updateOne(
+      { deadlineID: { $in: ids }, period },
+      {
+        $set: {
+          deadlineID: String(deadline).padStart(4, '0'),
+          period,
+          dateCompleted,
+          remarks: remarks || '',
+          updatedAt: new Date(),
+        }
       }
-      return matchId && matchPeriod;
-    });
-    
-    if (rowIndex === -1) {
-      console.warn(`[API] Log entry not found for deadline: ${deadline}, period: ${period}`);
-      return res.status(404).json({ error: 'Log entry not found' });
-    }
+    );
 
-    const updatedRow = [deadline, period, dateCompleted, remarks || ''];
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `retainerLog!A${rowIndex + 1}:D${rowIndex + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [updatedRow],
-      },
-    });
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Log entry not found' });
 
     console.log('[API] Successfully updated retainer log for deadline:', deadline);
     return res.status(200).json({ success: true });
@@ -1311,19 +1452,61 @@ app.put('/api/retainer-logs', async (req, res) => {
   }
 });
 
+app.get('/api/specials/:id/worklog', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const db = await getMongoDb();
+    const specialIds = userIdCandidates(id);
+    const tasks = await db.collection<any>('taskLogs')
+      .find({ specialID: { $in: specialIds } })
+      .sort({ taskID: 1 })
+      .toArray();
+    const taskIds = tasks.map(task => task.taskID).filter(Boolean);
+    const activities = taskIds.length > 0
+      ? await db.collection<any>('activityLogs')
+        .find({ taskID: { $in: taskIds } })
+        .sort({ activityID: 1 })
+        .toArray()
+      : [];
+
+    res.json({
+      taskLog: tasks.map(mapMongoTask),
+      activityLog: activities.map(mapMongoActivity)
+    });
+  } catch (error: any) {
+    console.error('[API] Error fetching special worklog:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/tasks', async (req, res) => {
   const { taskID, specialID, taskName, status } = req.body;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-    const row = [taskID, specialID, taskName, status || 'Pending'];
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'taskLog!A2',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] }
+    const db = await getMongoDb();
+    const taskLogs = db.collection<any>('taskLogs');
+    let id = String(taskID || '').trim();
+    if (!specialID || !taskName) {
+      return res.status(400).json({ error: 'specialID and taskName are required' });
+    }
+
+    if (!id || await taskLogs.findOne({ _id: id })) {
+      id = await getNextPaddedId(taskLogs, 'taskID');
+    }
+
+    await taskLogs.insertOne({
+      _id: id,
+      taskID: id,
+      specialID,
+      taskName,
+      status: status || 'Pending',
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
-    return res.status(200).json({ success: true });
+
+    return res.status(200).json({ success: true, taskID: id });
   } catch (error: any) {
+    if (error.code === 11000) return res.status(409).json({ error: 'Task ID already exists' });
     return res.status(500).json({ error: error.message });
   }
 });
@@ -1332,33 +1515,17 @@ app.put('/api/tasks/:id', async (req, res) => {
   const { id } = req.params;
   const { taskName, status } = req.body;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-    
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'taskLog!A2:D',
-    });
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => row[0] === id);
-    
-    if (rowIndex === -1) {
-      return res.status(404).json({ error: 'Task not found' });
-    }
+    const db = await getMongoDb();
+    const updates: any = { updatedAt: new Date() };
+    if (taskName !== undefined) updates.taskName = taskName;
+    if (status !== undefined) updates.status = status;
 
-    const currentRow = rows[rowIndex];
-    const updatedRow = [
-      id,
-      currentRow[1],
-      taskName || currentRow[2],
-      status || currentRow[3]
-    ];
+    const result = await db.collection<any>('taskLogs').updateOne(
+      { _id: id },
+      { $set: updates }
+    );
 
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `taskLog!A${rowIndex + 2}:D${rowIndex + 2}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [updatedRow] }
-    });
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Task not found' });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -1370,73 +1537,11 @@ app.put('/api/tasks/:id', async (req, res) => {
 app.delete('/api/tasks/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
+    const db = await getMongoDb();
+    const taskResult = await db.collection<any>('taskLogs').deleteOne({ _id: id });
+    await db.collection<any>('activityLogs').deleteMany({ taskID: id });
 
-    const taskResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'taskLog!A2:A',
-    });
-    const taskRows = taskResponse.data.values || [];
-    const taskRowIndex = taskRows.findIndex(row => row[0] === id);
-
-    if (taskRowIndex !== -1) {
-      const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-      const taskSheet = spreadsheet.data.sheets?.find(s => s.properties?.title === 'taskLog');
-      if (taskSheet) {
-        await sheets.spreadsheets.batchUpdate({
-          spreadsheetId: SPREADSHEET_ID,
-          requestBody: {
-            requests: [{
-              deleteDimension: {
-                range: {
-                  sheetId: taskSheet.properties?.sheetId,
-                  dimension: 'ROWS',
-                  startIndex: taskRowIndex + 1,
-                  endIndex: taskRowIndex + 2
-                }
-              }
-            }]
-          }
-        });
-      }
-    }
-
-    const activityResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'activityLog!A2:B',
-    });
-    const activityRows = activityResponse.data.values || [];
-    
-    const indicesToDelete: number[] = [];
-    activityRows.forEach((row, index) => {
-      if (row[1] === id) {
-        indicesToDelete.push(index + 1);
-      }
-    });
-
-    if (indicesToDelete.length > 0) {
-      const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-      const activitySheet = spreadsheet.data.sheets?.find(s => s.properties?.title === 'activityLog');
-      if (activitySheet) {
-        indicesToDelete.sort((a, b) => b - a);
-        
-        const requests = indicesToDelete.map(rowIndex => ({
-          deleteDimension: {
-            range: {
-              sheetId: activitySheet.properties?.sheetId,
-              dimension: 'ROWS',
-              startIndex: rowIndex,
-              endIndex: rowIndex + 1
-            }
-          }
-        }));
-
-        await sheets.spreadsheets.batchUpdate({
-          spreadsheetId: SPREADSHEET_ID,
-          requestBody: { requests }
-        });
-      }
-    }
+    if (taskResult.deletedCount === 0) return res.status(404).json({ error: 'Task not found' });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -1448,16 +1553,30 @@ app.delete('/api/tasks/:id', async (req, res) => {
 app.post('/api/activities', async (req, res) => {
   const { activityID, taskID, dateCompleted, description } = req.body;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-    const row = [activityID, taskID, dateCompleted, description];
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'activityLog!A2',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] }
+    const db = await getMongoDb();
+    const activityLogs = db.collection<any>('activityLogs');
+    let id = String(activityID || '').trim();
+    if (!taskID || !dateCompleted || !description) {
+      return res.status(400).json({ error: 'taskID, dateCompleted, and description are required' });
+    }
+
+    if (!id || await activityLogs.findOne({ _id: id })) {
+      id = await getNextPaddedId(activityLogs, 'activityID');
+    }
+
+    await activityLogs.insertOne({
+      _id: id,
+      activityID: id,
+      taskID,
+      dateCompleted,
+      description,
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
-    return res.status(200).json({ success: true });
+
+    return res.status(200).json({ success: true, activityID: id });
   } catch (error: any) {
+    if (error.code === 11000) return res.status(409).json({ error: 'Activity ID already exists' });
     return res.status(500).json({ error: error.message });
   }
 });
@@ -1466,33 +1585,17 @@ app.put('/api/activities/:id', async (req, res) => {
   const { id } = req.params;
   const { description, dateCompleted } = req.body;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-    
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'activityLog!A2:D',
-    });
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => row[0] === id);
-    
-    if (rowIndex === -1) {
-      return res.status(404).json({ error: 'Activity not found' });
-    }
+    const db = await getMongoDb();
+    const updates: any = { updatedAt: new Date() };
+    if (dateCompleted !== undefined) updates.dateCompleted = dateCompleted;
+    if (description !== undefined) updates.description = description;
 
-    const currentRow = rows[rowIndex];
-    const updatedRow = [
-      id,
-      currentRow[1],
-      dateCompleted || currentRow[2],
-      description || currentRow[3]
-    ];
+    const result = await db.collection<any>('activityLogs').updateOne(
+      { _id: id },
+      { $set: updates }
+    );
 
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `activityLog!A${rowIndex + 2}:D${rowIndex + 2}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [updatedRow] }
-    });
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Activity not found' });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -1504,43 +1607,9 @@ app.put('/api/activities/:id', async (req, res) => {
 app.delete('/api/activities/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'activityLog!A2:A',
-    });
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => row[0] === id);
-
-    if (rowIndex === -1) {
-      return res.status(404).json({ error: 'Activity not found' });
-    }
-
-    const spreadsheet = await sheets.spreadsheets.get({
-      spreadsheetId: SPREADSHEET_ID
-    });
-    const sheet = spreadsheet.data.sheets?.find(s => s.properties?.title === 'activityLog');
-    if (!sheet) throw new Error('activityLog sheet not found');
-    const sheetId = sheet.properties?.sheetId;
-
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SPREADSHEET_ID,
-      requestBody: {
-        requests: [
-          {
-            deleteDimension: {
-              range: {
-                sheetId: sheetId,
-                dimension: 'ROWS',
-                startIndex: rowIndex + 1,
-                endIndex: rowIndex + 2
-              }
-            }
-          }
-        ]
-      }
-    });
+    const db = await getMongoDb();
+    const result = await db.collection<any>('activityLogs').deleteOne({ _id: id });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Activity not found' });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -1553,26 +1622,21 @@ app.delete('/api/activities/:id', async (req, res) => {
 app.post('/api/credentials', async (req, res) => {
   const { clientID, systemName, username, password, securityAnswer, remarks } = req.body;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-    
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'credentials!A2:A',
-    });
-    const rows = response.data.values || [];
-    let nextIdNum = 1;
-    if (rows.length > 0) {
-      const ids = rows.map(r => r[0]).filter(id => id && !isNaN(parseInt(id, 10))).map(id => parseInt(id, 10));
-      if (ids.length > 0) nextIdNum = Math.max(...ids) + 1;
-    }
-    const credentialID = nextIdNum.toString().padStart(4, '0');
-    
-    const row = [credentialID, clientID, systemName, username, password, securityAnswer, remarks || ''];
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'credentials!A2',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] }
+    const db = await getMongoDb();
+    const collection = db.collection<any>('credentials');
+    const credentialID = await getNextNumericId(collection, 'credentialID');
+
+    await collection.insertOne({
+      _id: credentialID,
+      credentialID,
+      clientID,
+      systemName,
+      username,
+      password,
+      securityAnswer,
+      remarks: remarks || '',
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
     return res.status(200).json({ success: true, credentialID });
   } catch (error: any) {
@@ -1584,34 +1648,21 @@ app.put('/api/credentials/:id', async (req, res) => {
   const { id } = req.params;
   const { systemName, username, password, securityAnswer, remarks } = req.body;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-    
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'credentials!A:G',
-    });
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => String(row[0]).trim().replace(/^0+/, '') === id.replace(/^0+/, ''));
-    
-    if (rowIndex === -1) return res.status(404).json({ error: 'Credential not found' });
+    const db = await getMongoDb();
+    const ids = userIdCandidates(id);
+    const updates: any = { updatedAt: new Date() };
+    if (systemName !== undefined) updates.systemName = systemName;
+    if (username !== undefined) updates.username = username;
+    if (password !== undefined) updates.password = password;
+    if (securityAnswer !== undefined) updates.securityAnswer = securityAnswer;
+    if (remarks !== undefined) updates.remarks = remarks;
 
-    const currentRow = rows[rowIndex];
-    const updatedRow = [
-      id.padStart(4, '0'),
-      currentRow[1],
-      systemName || currentRow[2],
-      username || currentRow[3],
-      password || currentRow[4],
-      securityAnswer !== undefined ? securityAnswer : currentRow[5],
-      remarks !== undefined ? remarks : currentRow[6]
-    ];
+    const result = await db.collection<any>('credentials').updateOne(
+      { $or: [{ _id: { $in: ids } }, { credentialID: { $in: ids } }] },
+      { $set: updates }
+    );
 
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `credentials!A${rowIndex + 1}:G${rowIndex + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [updatedRow] }
-    });
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Credential not found' });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -1622,36 +1673,10 @@ app.put('/api/credentials/:id', async (req, res) => {
 app.delete('/api/credentials/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'credentials!A:A',
-    });
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => String(row[0]).trim().replace(/^0+/, '') === id.replace(/^0+/, ''));
-
-    if (rowIndex === -1) return res.status(404).json({ error: 'Credential not found' });
-
-    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-    const sheet = spreadsheet.data.sheets?.find(s => s.properties?.title === 'credentials');
-    if (!sheet) throw new Error('credentials sheet not found');
-
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SPREADSHEET_ID,
-      requestBody: {
-        requests: [{
-          deleteDimension: {
-            range: {
-              sheetId: sheet.properties?.sheetId,
-              dimension: 'ROWS',
-              startIndex: rowIndex,
-              endIndex: rowIndex + 1
-            }
-          }
-        }]
-      }
-    });
+    const db = await getMongoDb();
+    const ids = userIdCandidates(id);
+    const result = await db.collection<any>('credentials').deleteOne({ $or: [{ _id: { $in: ids } }, { credentialID: { $in: ids } }] });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Credential not found' });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -1662,36 +1687,9 @@ app.delete('/api/credentials/:id', async (req, res) => {
 app.delete('/api/transmittals/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'transmittals!A:A',
-    });
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => String(row[0]) === String(id));
-
-    if (rowIndex === -1) return res.status(404).json({ error: 'Transmittal not found' });
-
-    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-    const sheet = spreadsheet.data.sheets?.find(s => s.properties?.title === 'transmittals');
-    if (!sheet) throw new Error('transmittals sheet not found');
-
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SPREADSHEET_ID,
-      requestBody: {
-        requests: [{
-          deleteDimension: {
-            range: {
-              sheetId: sheet.properties?.sheetId,
-              dimension: 'ROWS',
-              startIndex: rowIndex,
-              endIndex: rowIndex + 1
-            }
-          }
-        }]
-      }
-    });
+    const db = await getMongoDb();
+    const result = await db.collection<any>('transmittals').deleteOne({ _id: id });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Transmittal not found' });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -1702,36 +1700,9 @@ app.delete('/api/transmittals/:id', async (req, res) => {
 app.delete('/api/meetings/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    if (!SPREADSHEET_ID) throw new Error('GOOGLE_SHEET_ID is not configured');
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'meetings!A:A',
-    });
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => String(row[0]) === String(id));
-
-    if (rowIndex === -1) return res.status(404).json({ error: 'Meeting not found' });
-
-    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-    const sheet = spreadsheet.data.sheets?.find(s => s.properties?.title === 'meetings');
-    if (!sheet) throw new Error('meetings sheet not found');
-
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SPREADSHEET_ID,
-      requestBody: {
-        requests: [{
-          deleteDimension: {
-            range: {
-              sheetId: sheet.properties?.sheetId,
-              dimension: 'ROWS',
-              startIndex: rowIndex,
-              endIndex: rowIndex + 1
-            }
-          }
-        }]
-      }
-    });
+    const db = await getMongoDb();
+    const result = await db.collection<any>('meetings').deleteOne({ _id: id });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Meeting not found' });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {

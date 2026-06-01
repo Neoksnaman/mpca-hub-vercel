@@ -2,12 +2,15 @@ import React, { useContext, useMemo, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { AppContext } from '../App';
+import UserHoverCard from '../components/UserHoverCard';
 import { Search, User as UserIcon, Building2, ChevronRight, ChevronLeft, ChevronDown, FileText, Briefcase, Plus, X, Loader2, CheckCircle2, AlertCircle, Eye, Calendar, UserPlus, Shield, Edit2, Trash2, Layers, ArrowUpRight, Copy } from 'lucide-react';
 import { UserRole } from '../types';
 import { canViewClient } from '../utils/rbac';
 import { addClient, addRetainer, updateClient, updateRetainer, deleteRetainer, addSpecial, updateSpecial, deleteSpecial, addCredential, updateCredential, deleteCredential, addNotification } from '../services/googleSheetsService';
 
 const normalizeId = (id: any) => String(id || '').replace(/^0+(?!$)/, '').trim() || '0';
+const getUserFullName = (user: any) => `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
+const sortUsersByName = (users: any[]) => [...users].sort((a, b) => getUserFullName(a).localeCompare(getUserFullName(b)));
 
 // --- Sub-components to reduce duplication ---
 
@@ -26,10 +29,10 @@ const TaxComplianceRows = ({
     retainers: any[]
 }) => {
     return (
-        <div className="mt-3 p-4 bg-gray-50/50 dark:bg-gray-900/50 border border-neutral-medium dark:border-gray-700 rounded-xl space-y-3">
+        <div className="mt-3 p-4 bg-neutral-light/45 dark:bg-gray-900/50 border border-neutral-medium/60 dark:border-gray-700 rounded-xl space-y-3">
             <div className="flex items-center gap-2 mb-2">
                 <Shield size={14} className="text-primary" />
-                <span className="text-[10px] font-bold text-secondary uppercase tracking-wider">Required Compliances</span>
+                <span className="text-[10px] font-black text-neutral-dark dark:text-white">Required Compliances</span>
             </div>
 
             {/* Table Header */}
@@ -259,26 +262,36 @@ const ServiceAssignmentBox = ({
         });
 
     return (
-        <div className="bg-neutral-light/30 dark:bg-gray-900/30 border border-neutral-medium dark:border-gray-700 rounded-2xl p-4 space-y-4 relative group">
+        <div className="bg-white/85 dark:bg-gray-800/60 border border-neutral-medium/60 dark:border-gray-700 rounded-2xl p-4 space-y-4 relative group shadow-sm shadow-neutral-dark/5">
             {assignments.length > 1 && (
                 <button
                     type="button"
                     onClick={() => removeAssignmentBox(assignment.id)}
-                    className="absolute top-4 right-4 p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all relative z-10"
+                    className="absolute top-3 right-3 p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all z-10"
                     title="Remove Service"
                 >
                     <X size={16} />
                 </button>
             )}
 
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="flex items-center gap-2 pr-10">
+                <div className="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                    <FileText size={15} />
+                </div>
+                <div>
+                    <h4 className="text-[11px] font-black text-neutral-dark dark:text-white">Retainer Service Assignment</h4>
+                    <p className="text-[9px] font-bold text-secondary/70 dark:text-gray-400">Select service, staff owner, and deadline logic</p>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="space-y-1">
-                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Service</label>
+                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Service</label>
                     <select
                         required
                         value={assignment.serviceId}
                         onChange={(e) => updateAssignment(assignment.id, { serviceId: e.target.value, selectedTaxes: [], dueDateCode: '' })}
-                        className="w-full px-2.5 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-primary outline-none"
+                        className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-[11px] font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
                     >
                         <option value="">Select...</option>
                         {availableServices.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -286,13 +299,13 @@ const ServiceAssignmentBox = ({
                 </div>
 
                 <div className="space-y-1">
-                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Assignee</label>
+                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Assignee</label>
                     <select
                         required
                         disabled={!canModifyAssignment}
                         value={assignment.assignedStaffId}
                         onChange={(e) => updateAssignment(assignment.id, { assignedStaffId: e.target.value })}
-                        className={`w-full px-2.5 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-primary outline-none ${!canModifyAssignment ? 'opacity-70 cursor-not-allowed' : ''}`}
+                        className={`w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-[11px] font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all ${!canModifyAssignment ? 'opacity-70 cursor-not-allowed' : ''}`}
                     >
                         <option value="">Select...</option>
                         {availableStaff.map(u => <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>)}
@@ -300,21 +313,21 @@ const ServiceAssignmentBox = ({
                 </div>
 
                 <div className="space-y-1">
-                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Start</label>
+                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Start Date</label>
                     <input
                         required
                         type="date"
                         value={assignment.startDate}
                         onChange={(e) => updateAssignment(assignment.id, { startDate: e.target.value })}
-                        className="w-full px-2 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-primary outline-none"
+                        className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-[11px] font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
                     />
                 </div>
 
                 {assignment.serviceId && assignment.serviceId !== '0001' && (
-                    <div className="col-span-full mt-1 p-3 bg-white/50 dark:bg-gray-800/50 border border-neutral-medium dark:border-gray-700 rounded-xl space-y-2">
+                    <div className="col-span-full mt-1 p-4 bg-neutral-light/45 dark:bg-gray-900/50 border border-neutral-medium/60 dark:border-gray-700 rounded-xl space-y-3">
                         <div className="flex items-center gap-2 mb-1">
                             <Calendar size={12} className="text-primary" />
-                            <span className="text-[9px] font-black text-secondary uppercase tracking-widest">Deadline Logic</span>
+                            <span className="text-[10px] font-black text-neutral-dark dark:text-white">Deadline Logic</span>
                         </div>
                         <div className="flex items-center gap-3">
                             <select
@@ -387,27 +400,37 @@ const SpecialEngagementBox = ({
     specialAssignments: any[]
 }) => {
     return (
-        <div className="bg-neutral-light/30 dark:bg-gray-900/30 border border-neutral-medium dark:border-gray-700 rounded-2xl p-4 space-y-3 relative group">
+        <div className="bg-white/85 dark:bg-gray-800/60 border border-neutral-medium/60 dark:border-gray-700 rounded-2xl p-4 space-y-4 relative group shadow-sm shadow-neutral-dark/5">
             {specialAssignments.length > 1 && (
                 <button
                     type="button"
                     onClick={() => removeSpecialBox(task.id)}
-                    className="absolute top-4 right-4 p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all relative z-10"
+                    className="absolute top-3 right-3 p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all z-10"
                     title="Remove Project"
                 >
                     <X size={16} />
                 </button>
             )}
 
+            <div className="flex items-center gap-2 pr-10">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
+                    <Briefcase size={15} />
+                </div>
+                <div>
+                    <h4 className="text-[11px] font-black text-neutral-dark dark:text-white">Special Project Assignment</h4>
+                    <p className="text-[9px] font-bold text-secondary/70 dark:text-gray-400">Set project details, owner, timeline, and status</p>
+                </div>
+            </div>
+
             <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1">
-                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Service</label>
+                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Project Type</label>
                         <select
                             required
                             value={task.serviceId}
                             onChange={(e) => updateSpecialAssignment(task.id, { serviceId: e.target.value })}
-                            className="w-full px-2.5 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-primary outline-none"
+                            className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-[11px] font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
                         >
                             <option value="">Select...</option>
                             {context?.services?.filter((s: any) => String(s.type || '').trim().toLowerCase() === 'special').map((s: any) => (
@@ -416,26 +439,26 @@ const SpecialEngagementBox = ({
                         </select>
                     </div>
                     <div className="space-y-1">
-                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Title</label>
+                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Project Title</label>
                         <input
                             required
                             type="text"
                             value={task.projectTitle}
                             onChange={(e) => updateSpecialAssignment(task.id, { projectTitle: e.target.value })}
-                            className="w-full px-3 py-1.5 bg-white dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-primary outline-none"
+                            className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-[11px] font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
                             placeholder="Audit Support..."
                         />
                     </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1">
-                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Assignee</label>
+                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Assignee</label>
                         <select
                             required
                             value={task.assignedStaffId}
                             onChange={(e) => updateSpecialAssignment(task.id, { assignedStaffId: e.target.value })}
-                            className="w-full px-2.5 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-primary outline-none"
+                            className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-[11px] font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
                         >
                             <option value="">Select...</option>
                             {availableStaff.map(u => (
@@ -444,11 +467,11 @@ const SpecialEngagementBox = ({
                         </select>
                     </div>
                     <div className="space-y-1">
-                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Status</label>
+                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Status</label>
                         <select
                             value={task.status}
                             onChange={(e) => updateSpecialAssignment(task.id, { status: e.target.value })}
-                            className="w-full px-2.5 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-primary outline-none"
+                            className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-[11px] font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
                         >
                             <option value="Planning">Planning</option>
                             <option value="In Progress">In Progress</option>
@@ -458,35 +481,35 @@ const SpecialEngagementBox = ({
                     </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1">
-                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Start</label>
+                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Start Date</label>
                         <input
                             required
                             type="date"
                             value={task.startDate}
                             onChange={(e) => updateSpecialAssignment(task.id, { startDate: e.target.value })}
-                            className="w-full px-2 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-primary outline-none"
+                            className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-[11px] font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
                         />
                     </div>
                     <div className="space-y-1">
-                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Est. Done</label>
+                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Estimated Done</label>
                         <input
                             type="date"
                             value={task.endDate}
                             onChange={(e) => updateSpecialAssignment(task.id, { endDate: e.target.value })}
-                            className="w-full px-2 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-primary outline-none"
+                            className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-[11px] font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
                         />
                     </div>
                 </div>
 
                 <div className="space-y-1">
-                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Description</label>
+                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Description</label>
                     <textarea
                         value={task.description}
                         onChange={(e) => updateSpecialAssignment(task.id, { description: e.target.value })}
                         rows={2}
-                        className="w-full px-3 py-1.5 bg-white dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-primary outline-none resize-none"
+                        className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-[11px] font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none resize-none transition-all"
                         placeholder="Project brief..."
                     />
                 </div>
@@ -525,44 +548,51 @@ const CredentialBox = ({
     };
 
     if (isEditing) {
+        const isExistingCredential = Boolean(credential.credentialID);
+
         return (
-            <div className="bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-primary/30 dark:border-primary/20 shadow-xl shadow-primary/10 p-6 space-y-4 animate-in zoom-in-95 duration-200">
-                <div className="flex items-center justify-between">
-                    <h4 className="text-[10px] font-black text-primary uppercase tracking-widest flex items-center gap-2">
-                        <Edit2 size={12} />
-                        {credential.credentialID ? 'Editing Credential' : 'New Credential'}
-                    </h4>
+            <div className={`bg-white/85 dark:bg-gray-800/60 rounded-2xl border shadow-sm shadow-neutral-dark/5 p-5 space-y-4 animate-in zoom-in-95 duration-200 ${isExistingCredential ? 'border-primary/30 dark:border-primary/20' : 'border-emerald-500/30 dark:border-emerald-500/20'}`}>
+                <div className="flex items-center gap-2">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${isExistingCredential ? 'bg-primary/10 text-primary' : 'bg-emerald-500/10 text-emerald-600'}`}>
+                        <Shield size={15} />
+                    </div>
+                    <div>
+                        <h4 className={`text-[10px] font-black uppercase tracking-widest ${isExistingCredential ? 'text-primary' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                            {isExistingCredential ? 'Editing Credential' : 'New Credential'}
+                        </h4>
+                        <p className="text-[9px] font-bold text-secondary/70 dark:text-gray-400">Store system access details for this client</p>
+                    </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1">
-                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">System Name</label>
+                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">System Name</label>
                         <input
                             type="text"
                             value={formData.systemName}
                             onChange={(e) => setFormData({ ...formData, systemName: e.target.value })}
-                            className="w-full px-4 py-2 bg-white/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all disabled:opacity-50"
+                            className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all disabled:opacity-50"
                             placeholder="e.g. BIR, SSS..."
                         />
                     </div>
                     <div className="space-y-1">
-                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Username</label>
+                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Username</label>
                         <input
                             type="text"
                             value={formData.username}
                             onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                            className="w-full px-4 py-2 bg-white/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all disabled:opacity-50"
+                            className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all disabled:opacity-50"
                         />
                     </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1">
-                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Password</label>
+                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Password</label>
                         <div className="relative">
                             <input
                                 type={showPassword ? "text" : "password"}
                                 value={formData.password}
                                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                                className="w-full px-4 py-2 pr-10 bg-white/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all disabled:opacity-50"
+                                className="w-full px-3 py-2 pr-10 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all disabled:opacity-50"
                             />
                             <button 
                                 type="button"
@@ -574,21 +604,21 @@ const CredentialBox = ({
                         </div>
                     </div>
                     <div className="space-y-1">
-                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Security Answer</label>
+                        <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Security Answer</label>
                         <input
                             type="text"
                             value={formData.securityAnswer}
                             onChange={(e) => setFormData({ ...formData, securityAnswer: e.target.value })}
-                            className="w-full px-4 py-2 bg-white/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all disabled:opacity-50"
+                            className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all disabled:opacity-50"
                         />
                     </div>
                 </div>
                 <div className="space-y-1">
-                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Remarks</label>
+                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-60 dark:opacity-100">Remarks</label>
                     <textarea
                         value={formData.remarks}
                         onChange={(e) => setFormData({ ...formData, remarks: e.target.value })}
-                        className="w-full px-4 py-2 bg-white/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all disabled:opacity-50 min-h-[60px]"
+                        className="w-full px-3 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all disabled:opacity-50 min-h-[64px] resize-none"
                         placeholder="Additional notes..."
                     />
                 </div>
@@ -602,7 +632,7 @@ const CredentialBox = ({
                     <button
                         onClick={() => onSave?.(formData)}
                         disabled={isSubmitting}
-                        className="flex-1 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-lg shadow-primary/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                        className={`flex-1 py-2 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${isExistingCredential ? 'bg-primary hover:bg-primary-dark shadow-primary/20' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'}`}
                     >
                         {isSubmitting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
                         Save Credential
@@ -613,33 +643,35 @@ const CredentialBox = ({
     }
 
     return (
-        <div className="group bg-white/60 dark:bg-gray-800/40 backdrop-blur-sm rounded-[1.5rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 p-4 relative overflow-hidden transition-all hover:shadow-2xl hover:shadow-primary/10 hover:-translate-y-1 duration-300">
-            <div className="flex items-center justify-between mb-3 relative z-10">
+        <div className="group bg-white/85 dark:bg-gray-800/60 rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm shadow-neutral-dark/5 p-4 relative overflow-hidden hover:border-primary/20 hover:shadow-md transition-all duration-300">
+            <div className="flex items-start justify-between gap-3 relative z-10">
                 <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-primary/10 rounded-xl flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
+                    <div className="w-9 h-9 bg-primary/10 rounded-xl flex items-center justify-center text-primary group-hover:scale-105 transition-transform shrink-0">
                         <Shield size={16} />
                     </div>
-                    <div>
-                        <h4 className="text-[11px] font-black text-neutral-dark dark:text-white uppercase tracking-tight">{credential.systemName}</h4>
-                        <p className="text-[9px] text-secondary font-bold opacity-70">System Account</p>
+                    <div className="min-w-0">
+                        <h4 className="text-[13px] font-black text-neutral-dark dark:text-white leading-tight truncate">{credential.systemName || 'Untitled Credential'}</h4>
+                        <p className="text-[10px] text-secondary font-bold opacity-70 truncate">
+                            Username: {credential.username || '---'} · Password stored
+                        </p>
                     </div>
                 </div>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all relative z-10">
-                    <button onClick={() => onEdit?.(credential)} className="p-2 text-secondary hover:text-primary hover:bg-primary/10 rounded-xl transition-all">
+                <div className="flex items-center gap-1 opacity-45 group-hover:opacity-100 transition-all relative z-10 shrink-0">
+                    <button onClick={() => onEdit?.(credential)} className="p-2 text-secondary hover:text-primary hover:bg-primary/10 rounded-xl transition-all" title="Edit Credential">
                         <Edit2 size={14} />
                     </button>
-                    <button onClick={() => onDelete?.(credential.credentialID)} className="p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all">
+                    <button onClick={() => onDelete?.(credential.credentialID)} className="p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all" title="Delete Credential">
                         <Trash2 size={14} />
                     </button>
                 </div>
             </div>
             
-            <div className="grid grid-cols-2 gap-4 relative z-10 pl-11">
+            <div className="grid grid-cols-2 gap-4 relative z-10 pl-12 mt-3">
                 <div className="space-y-1">
                     <label className="text-[8px] font-black text-secondary/50 uppercase tracking-widest">Username</label>
                     <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-bold text-neutral-dark dark:text-white">{credential.username}</span>
-                        <button onClick={() => handleCopy(credential.username)} className="text-secondary hover:text-primary transition-colors" title="Copy Username">
+                        <span className="text-[10px] font-bold text-neutral-dark dark:text-white truncate">{credential.username || '---'}</span>
+                        <button onClick={() => handleCopy(credential.username || '')} className="text-secondary hover:text-primary transition-colors" title="Copy Username">
                             <Copy size={10} />
                         </button>
                     </div>
@@ -653,7 +685,7 @@ const CredentialBox = ({
                         <button onClick={() => setShowPassword(!showPassword)} className="text-secondary hover:text-primary transition-colors">
                             {showPassword ? <Eye size={10} className="text-primary" /> : <Eye size={10} />}
                         </button>
-                        <button onClick={() => handleCopy(credential.password)} className="text-secondary hover:text-primary transition-colors" title="Copy Password">
+                        <button onClick={() => handleCopy(credential.password || '')} className="text-secondary hover:text-primary transition-colors" title="Copy Password">
                             <Copy size={10} />
                         </button>
                     </div>
@@ -672,8 +704,77 @@ const CredentialBox = ({
                     )}
                 </div>
             )}
-            
-            <div className="absolute -bottom-10 -right-10 w-24 h-24 bg-primary/5 rounded-full blur-2xl opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+    );
+};
+
+const CredentialRow = ({
+    credential,
+    onEdit,
+    onDelete
+}: {
+    key?: React.Key,
+    credential: any,
+    onEdit?: (c: any) => void,
+    onDelete?: (id: string) => void
+}) => {
+    const [showPassword, setShowPassword] = useState(false);
+
+    const handleCopy = (text: string) => {
+        navigator.clipboard.writeText(text || '');
+    };
+
+    return (
+        <div className="group grid grid-cols-1 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_auto] gap-3 sm:gap-4 px-4 py-3.5 hover:bg-primary/[0.02] dark:hover:bg-primary/[0.05] transition-colors">
+            <div className="flex items-start gap-3 min-w-0">
+                <div className="w-9 h-9 bg-primary/10 rounded-xl flex items-center justify-center text-primary shrink-0">
+                    <Shield size={16} />
+                </div>
+                <div className="min-w-0">
+                    <h4 className="text-[13px] font-black text-neutral-dark dark:text-white leading-tight truncate">
+                        {credential.systemName || 'Untitled Credential'}
+                    </h4>
+                    {credential.remarks && (
+                        <p className="text-[10px] text-secondary dark:text-gray-400 font-medium truncate mt-0.5" title={credential.remarks}>
+                            {credential.remarks}
+                        </p>
+                    )}
+                </div>
+            </div>
+
+            <div className="sm:self-center min-w-0 pl-12 sm:pl-0">
+                <p className="sm:hidden text-[9px] font-black text-secondary/50 mb-1">Username</p>
+                <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-[11px] font-bold text-neutral-dark dark:text-white truncate">{credential.username || '---'}</span>
+                    <button type="button" onClick={() => handleCopy(credential.username)} className="text-secondary hover:text-primary transition-colors shrink-0" title="Copy Username">
+                        <Copy size={12} />
+                    </button>
+                </div>
+            </div>
+
+            <div className="sm:self-center min-w-0 pl-12 sm:pl-0">
+                <p className="sm:hidden text-[9px] font-black text-secondary/50 mb-1">Password</p>
+                <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-[11px] font-bold text-neutral-dark dark:text-white truncate">
+                        {showPassword ? credential.password : '••••••••'}
+                    </span>
+                    <button type="button" onClick={() => setShowPassword(prev => !prev)} className="text-secondary hover:text-primary transition-colors shrink-0" title={showPassword ? 'Hide Password' : 'Show Password'}>
+                        <Eye size={12} className={showPassword ? 'text-primary' : ''} />
+                    </button>
+                    <button type="button" onClick={() => handleCopy(credential.password)} className="text-secondary hover:text-primary transition-colors shrink-0" title="Copy Password">
+                        <Copy size={12} />
+                    </button>
+                </div>
+            </div>
+
+            <div className="flex items-center gap-1 sm:justify-end pl-12 sm:pl-0 opacity-70 group-hover:opacity-100 transition-opacity">
+                <button type="button" onClick={() => onEdit?.(credential)} className="p-2 text-secondary hover:text-primary hover:bg-primary/10 rounded-xl transition-all" title="Edit Credential">
+                    <Edit2 size={14} />
+                </button>
+                <button type="button" onClick={() => onDelete?.(credential.credentialID)} className="p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all" title="Delete Credential">
+                    <Trash2 size={14} />
+                </button>
+            </div>
         </div>
     );
 };
@@ -684,6 +785,16 @@ const ClientTable = ({ clients, title, activeTab, onViewDetails, defaultExpanded
     const [isExpanded, setIsExpanded] = useState(defaultExpanded || !title);
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 10;
+    const userByKey = useMemo(() => {
+        const lookup = new Map<string, any>();
+        allUsers.forEach(u => {
+            lookup.set(String(u.id), u);
+            lookup.set(u.username || '', u);
+            lookup.set(u.firstName, u);
+            lookup.set(`${u.firstName} ${u.lastName}`, u);
+        });
+        return lookup;
+    }, [allUsers]);
 
     useEffect(() => {
         setCurrentPage(1);
@@ -696,28 +807,14 @@ const ClientTable = ({ clients, title, activeTab, onViewDetails, defaultExpanded
     const paginatedClients = clients.slice(startIndex, startIndex + itemsPerPage);
 
     const getStaffInfo = (staffName: string) => {
-        return allUsers.find(u =>
-            `${u.firstName} ${u.lastName}` === staffName ||
-            u.firstName === staffName ||
-            u.id === staffName
-        );
+        return userByKey.get(staffName);
     };
 
     const renderStaffAvatar = (staffName: string) => {
         const staff = getStaffInfo(staffName);
-        const initials = staffName.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
 
         return (
-            <div className="flex items-center gap-2">
-                <div className="w-6 h-6 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center overflow-hidden shrink-0">
-                    {staff?.avatarUrl ? (
-                        <img src={staff.avatarUrl} alt={staffName} className="w-full h-full object-cover" />
-                    ) : (
-                        <span className="text-[10px] font-black text-primary">{initials}</span>
-                    )}
-                </div>
-                <span className="text-[12px] font-bold text-neutral-dark dark:text-white truncate max-w-[150px]">{staffName}</span>
-            </div>
+            <UserHoverCard user={staff} fallbackName={staffName} size="md" showName />
         );
     };
 
@@ -894,30 +991,31 @@ const ClientTable = ({ clients, title, activeTab, onViewDetails, defaultExpanded
                         </table>
                     </div>
 
-                    {/* Modern Premium Pagination */}
+                    {/* Pagination */}
                     {totalPages > 1 && (
-                        <div className="px-5 py-3 bg-neutral-light/40 dark:bg-gray-900/40 border-t border-neutral-medium/50 dark:border-gray-800 flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-black text-secondary uppercase tracking-[0.15em] opacity-60">Displaying Page</span>
-                                <div className="flex items-center gap-1">
-                                    <span className="w-6 h-6 flex items-center justify-center bg-primary text-white text-[11px] font-black rounded-lg shadow-lg shadow-primary/20">{currentPage}</span>
-                                    <span className="text-[10px] font-black text-secondary uppercase tracking-[0.15em] opacity-60 ml-1">of {totalPages}</span>
-                                </div>
-                            </div>
+                        <div className="px-4 py-3 bg-white dark:bg-gray-800 border-t border-neutral-medium/50 dark:border-gray-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <p className="text-[11px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest">
+                                Showing {startIndex + 1}-{Math.min(startIndex + itemsPerPage, clients.length)} of {clients.length}
+                            </p>
                             <div className="flex items-center gap-2">
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setCurrentPage(p => Math.max(1, p - 1)); }}
                                     disabled={currentPage === 1}
-                                    className="w-8 h-8 flex items-center justify-center rounded-xl bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 text-secondary hover:text-primary hover:border-primary/30 hover:shadow-xl hover:shadow-primary/5 disabled:opacity-30 disabled:cursor-not-allowed transition-all group"
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[11px] font-black uppercase tracking-wider text-neutral-dark dark:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-light dark:hover:bg-gray-700 transition-colors"
                                 >
-                                    <ChevronLeft size={16} className="group-hover:-translate-x-0.5 transition-transform" />
+                                    <ChevronRight size={14} className="rotate-180" />
+                                    Prev
                                 </button>
+                                <span className="px-3 py-1.5 rounded-lg bg-neutral-light dark:bg-gray-900 text-[11px] font-black text-primary">
+                                    {currentPage} / {totalPages}
+                                </span>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setCurrentPage(p => Math.min(totalPages, p + 1)); }}
                                     disabled={currentPage === totalPages}
-                                    className="w-8 h-8 flex items-center justify-center rounded-xl bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 text-secondary hover:text-primary hover:border-primary/30 hover:shadow-xl hover:shadow-primary/5 disabled:opacity-30 disabled:cursor-not-allowed transition-all group"
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[11px] font-black uppercase tracking-wider text-neutral-dark dark:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-light dark:hover:bg-gray-700 transition-colors"
                                 >
-                                    <ChevronRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
+                                    Next
+                                    <ChevronRight size={14} />
                                 </button>
                             </div>
                         </div>
@@ -925,6 +1023,274 @@ const ClientTable = ({ clients, title, activeTab, onViewDetails, defaultExpanded
                 </div>
             )}
         </div>
+    );
+};
+
+const ClientGroupedTable: React.FC<{
+    sections: { title: string; clients: any[] }[];
+    activeTab: string;
+    groupBy: string;
+    onViewDetails?: (client: any) => void;
+}> = ({ sections, activeTab, groupBy, onViewDetails }) => {
+    const context = useContext(AppContext);
+    const allUsers = context?.allUsers || [];
+    const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+    const userByKey = useMemo(() => {
+        const lookup = new Map<string, any>();
+        allUsers.forEach(u => {
+            lookup.set(String(u.id), u);
+            lookup.set(u.username || '', u);
+            lookup.set(u.firstName, u);
+            lookup.set(`${u.firstName} ${u.lastName}`, u);
+        });
+        return lookup;
+    }, [allUsers]);
+
+    const toggleGroup = (group: string) => {
+        setExpandedGroups(prev => {
+            const next = new Set(prev);
+            if (next.has(group)) next.delete(group);
+            else next.add(group);
+            return next;
+        });
+    };
+
+    const getStaffInfo = (staffName: string) => userByKey.get(staffName);
+
+    const renderStaffAvatar = (staffName: string) => {
+        const staff = getStaffInfo(staffName);
+
+        return (
+            <UserHoverCard user={staff} fallbackName={staffName} size="md" showName />
+        );
+    };
+
+    const getServices = (client: any) => activeTab === 'Retainer'
+        ? Array.from(client.retainerServices || [])
+        : activeTab === 'Special'
+            ? Array.from(client.specialServices || [])
+            : Array.from(new Set([...Array.from(client.retainerServices || []), ...Array.from(client.specialServices || [])]));
+
+    const getStaff = (client: any) => Array.from<string>(activeTab === 'Retainer'
+        ? client.retainerStaff
+        : activeTab === 'Special'
+            ? client.specialStaff
+            : client.staff || []);
+
+    const getGroupStats = (items: any[]) => items.reduce((acc, client) => {
+        if (client.isActive) acc.active += 1;
+        else acc.inactive += 1;
+        if (client.types?.has?.('Retainer')) acc.retainer += 1;
+        if (client.types?.has?.('Special')) acc.special += 1;
+        return acc;
+    }, { active: 0, inactive: 0, retainer: 0, special: 0 });
+
+    const renderGroupTitle = (title: string) => {
+        if (groupBy === 'Staff') {
+            return renderStaffAvatar(title);
+        }
+
+        return (
+            <span className="text-[11px] font-bold text-neutral-dark dark:text-white">
+                {title}
+            </span>
+        );
+    };
+
+    const renderStatus = (client: any) => {
+        const isInactive = !client.isActive || String(client.status || '').toLowerCase().includes('inactive');
+        return (
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest border shadow-sm ${isInactive
+                    ? 'bg-neutral-50 text-secondary border-neutral-200 dark:bg-gray-700/50 dark:text-gray-400 dark:border-gray-700'
+                    : 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
+                }`}>
+                <div className={`w-1 h-1 rounded-full mr-1.5 ${isInactive ? 'bg-secondary/40' : 'bg-emerald-500'}`} />
+                {client.status || (client.isActive ? 'Active' : 'Inactive')}
+            </span>
+        );
+    };
+
+    const renderRow = (client: any) => {
+        const services = getServices(client);
+        const staffArr = getStaff(client);
+
+        return (
+            <tr
+                key={client.id || client.name}
+                onClick={() => onViewDetails?.(client)}
+                className="group cursor-pointer transition-all duration-300 hover:bg-primary/[0.02] dark:hover:bg-primary/[0.05] border-b border-neutral-medium/50 dark:border-gray-800 last:border-0"
+            >
+                <td className="px-4 py-2">
+                    <div className="flex items-center gap-3">
+                        <div className="p-1.5 bg-primary/5 rounded-lg text-primary border border-primary/10 transition-colors group-hover:bg-primary/10">
+                            <Building2 size={14} />
+                        </div>
+                        <span className="text-[13px] font-black text-neutral-dark dark:text-white tracking-tight group-hover:text-primary transition-colors truncate" title={client.name}>
+                            {client.name}
+                        </span>
+                    </div>
+                </td>
+                <td className="px-4 py-2">{renderStatus(client)}</td>
+                <td className="px-4 py-2">
+                    {services.length === 0 ? (
+                        <span className="text-[10px] text-secondary/30 dark:text-gray-400/30">-</span>
+                    ) : (
+                        <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-bold text-secondary dark:text-gray-400 truncate max-w-[160px] leading-none">{String(services[0])}</span>
+                            {services.length > 1 && (
+                                <span className="px-1.5 py-0.5 rounded-md bg-primary/5 text-[8px] font-black text-primary border border-primary/10">
+                                    +{services.length - 1}
+                                </span>
+                            )}
+                        </div>
+                    )}
+                </td>
+                <td className="px-4 py-2">
+                    {staffArr.length === 0 ? (
+                        <span className="text-[10px] text-secondary/30 font-bold italic uppercase tracking-tighter">Unassigned</span>
+                    ) : (
+                        <div className="flex items-center gap-1.5">
+                            {renderStaffAvatar(staffArr[0])}
+                            {staffArr.length > 1 && (
+                                <span className="px-1.5 py-0.5 rounded-md bg-primary/5 text-[8px] font-black text-primary border border-primary/10">
+                                    +{staffArr.length - 1}
+                                </span>
+                            )}
+                        </div>
+                    )}
+                </td>
+                <td className="px-4 py-2 text-right">
+                    <div className="flex justify-end opacity-0 group-hover:opacity-100 transition-all transform translate-x-1 group-hover:translate-x-0">
+                        <div className="p-1.5 bg-primary text-white rounded-lg shadow-lg shadow-primary/20 scale-90 group-hover:scale-100 transition-transform">
+                            <ArrowUpRight size={12} strokeWidth={3} />
+                        </div>
+                    </div>
+                </td>
+            </tr>
+        );
+    };
+
+    return (
+        <div className="bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5 overflow-hidden">
+            <table className="w-full text-left border-collapse table-fixed">
+                <thead>
+                    <tr className="bg-neutral-light/50 dark:bg-gray-900/50 border-b border-neutral-medium dark:border-gray-700">
+                        <th className="px-4 py-2.5 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.18em] w-[40%]">Client Entity</th>
+                        <th className="px-4 py-2.5 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.18em] w-[15%]">Status</th>
+                        <th className="px-4 py-2.5 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.18em] w-[20%]">Active Services</th>
+                        <th className="px-4 py-2.5 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.18em] w-[20%]">Assigned To</th>
+                        <th className="px-4 py-2.5 w-[5%]"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {sections.map(section => {
+                        const isExpanded = expandedGroups.has(section.title);
+                        const stats = getGroupStats(section.clients);
+
+                        return (
+                            <React.Fragment key={section.title}>
+                                <tr
+                                    onClick={() => toggleGroup(section.title)}
+                                    className="bg-neutral-light/40 dark:bg-gray-900/50 cursor-pointer hover:bg-primary/[0.04] dark:hover:bg-primary/[0.08] transition-colors"
+                                >
+                                    <td colSpan={5} className="px-5 py-2.5 border-b border-neutral-medium/50 dark:border-gray-800">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <ChevronRight
+                                                size={14}
+                                                className={`text-secondary/60 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                            />
+                                            {renderGroupTitle(section.title)}
+                                            <span className="px-1.5 py-0.5 rounded-md bg-white dark:bg-gray-800 text-[9px] font-black text-primary border border-neutral-medium dark:border-gray-700">
+                                                {section.clients.length} ITEMS
+                                            </span>
+                                            <div className="flex items-center gap-1 ml-auto">
+                                                {stats.active > 0 && (
+                                                    <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 text-[9px] font-black text-emerald-600 border border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">
+                                                        {stats.active} ACTIVE
+                                                    </span>
+                                                )}
+                                                {stats.inactive > 0 && (
+                                                    <span className="px-1.5 py-0.5 rounded-md bg-neutral-50 text-[9px] font-black text-secondary border border-neutral-200 dark:bg-gray-700/50 dark:text-gray-400 dark:border-gray-700">
+                                                        {stats.inactive} INACTIVE
+                                                    </span>
+                                                )}
+                                                {activeTab === 'All' && stats.retainer > 0 && (
+                                                    <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-[9px] font-black text-blue-600 border border-blue-100 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20">
+                                                        {stats.retainer} RETAINER
+                                                    </span>
+                                                )}
+                                                {activeTab === 'All' && stats.special > 0 && (
+                                                    <span className="px-1.5 py-0.5 rounded-md bg-amber-50 text-[9px] font-black text-amber-600 border border-amber-100 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20">
+                                                        {stats.special} SPECIAL
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {isExpanded && section.clients.map(renderRow)}
+                            </React.Fragment>
+                        );
+                    })}
+                </tbody>
+            </table>
+        </div>
+    );
+};
+
+const ClientSummaryStrip: React.FC<{
+    summary: { total: number; active: number; inactive: number; retainer: number; special: number; both: number };
+}> = ({ summary }) => {
+    const items = [
+        { label: 'Total', value: summary.total, tone: 'text-primary bg-primary/10 border-primary/15' },
+        { label: 'Active', value: summary.active, tone: 'text-emerald-600 bg-emerald-50 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' },
+        { label: 'Inactive', value: summary.inactive, tone: 'text-secondary bg-neutral-light border-neutral-medium dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700' },
+        { label: 'Retainers', value: summary.retainer, tone: 'text-blue-600 bg-blue-50 border-blue-100 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20' },
+        { label: 'Special Projects', value: summary.special, tone: 'text-amber-600 bg-amber-50 border-amber-100 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20' },
+        { label: 'Both', value: summary.both, tone: 'text-violet-600 bg-violet-50 border-violet-100 dark:bg-violet-500/10 dark:text-violet-400 dark:border-violet-500/20' }
+    ];
+
+    return (
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2">
+            {items.map(item => (
+                <div key={item.label} className={`rounded-xl border px-3 py-2 ${item.tone}`}>
+                    <div className="text-[11px] font-bold opacity-70">{item.label}</div>
+                    <div className="text-xl font-black leading-tight">{item.value}</div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+const ClientDrawerSection: React.FC<{
+    id: string;
+    title: string;
+    count?: number;
+    defaultOpen?: boolean;
+    action?: React.ReactNode;
+    children: React.ReactNode;
+}> = ({ id, title, count, action, children }) => {
+    return (
+        <section id={id} className="scroll-mt-24">
+            <div className="space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-1 h-4 bg-primary rounded-full" />
+                        <h3 className="text-sm font-black text-neutral-dark dark:text-white truncate">{title}</h3>
+                        {typeof count === 'number' && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-primary/10 text-[9px] font-black text-primary border border-primary/10">
+                                {count}
+                            </span>
+                        )}
+                    </div>
+                    {action}
+                </div>
+                <div>
+                    {children}
+                </div>
+            </div>
+        </section>
     );
 };
 
@@ -939,28 +1305,34 @@ const Clients: React.FC = () => {
     const [searchQuery, setSearchQuery] = useState('');
 
     const isManagerOrAbove = user?.role === UserRole.MANAGER || user?.role === UserRole.SUPERVISOR || user?.role === UserRole.ADMIN;
-    const [activeTab, setActiveTab] = useState<'All' | 'Retainer' | 'Special'>(isManagerOrAbove ? 'All' : 'Retainer');
+    const activeTab: 'All' = 'All';
+    const [clientFilters, setClientFilters] = useState({
+        status: 'All',
+        engagement: 'All',
+        retainerService: 'All',
+        specialService: 'All',
+        staff: 'All'
+    });
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [selectedClient, setSelectedClient] = useState<any | null>(null);
     const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
     const [showAssignmentForm, setShowAssignmentForm] = useState(false);
-    const [groupBy, setGroupBy] = useState<'None' | 'Team' | 'Staff' | 'Service'>('None');
+    const [groupBy, setGroupBy] = useState<'None' | 'Team' | 'Staff' | 'Service' | 'RetainerService' | 'SpecialService'>('None');
     const [isAddingClient, setIsAddingClient] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
 
     const location = useLocation();
 
-    // Auto-switch tab based on navigation state
-    useEffect(() => {
-        if (location.state && (location.state as any).activeTab) {
-            setActiveTab((location.state as any).activeTab);
-            // Clear state after using it to prevent sticky tab on refresh
-            window.history.replaceState({}, document.title);
-        }
-    }, [location.state]);
-
+    const handleEngagementFilterChange = (engagement: string) => {
+        setClientFilters(prev => ({
+            ...prev,
+            engagement,
+            retainerService: engagement === 'Retainer' ? prev.retainerService : 'All',
+            specialService: engagement === 'Special Project' ? prev.specialService : 'All'
+        }));
+    };
 
     const [formData, setFormData] = useState({
         name: '',
@@ -1003,11 +1375,37 @@ const Clients: React.FC = () => {
         user?.role === UserRole.SUPERVISOR ||
         user?.role === UserRole.SENIOR;
 
+    const clientLookups = useMemo(() => {
+        const userByKey = new Map<string, any>();
+        allUsers.forEach(u => {
+            userByKey.set(String(u.id), u);
+            userByKey.set(u.username || '', u);
+            userByKey.set(u.firstName, u);
+            userByKey.set(`${u.firstName} ${u.lastName}`, u);
+        });
+
+        const retainersByClient = new Map<string, any[]>();
+        retainers.forEach(r => {
+            const key = normalizeId(r.clientId);
+            if (!retainersByClient.has(key)) retainersByClient.set(key, []);
+            retainersByClient.get(key)!.push(r);
+        });
+
+        const specialsByClient = new Map<string, any[]>();
+        specials.forEach(s => {
+            const key = normalizeId(s.clientId);
+            if (!specialsByClient.has(key)) specialsByClient.set(key, []);
+            specialsByClient.get(key)!.push(s);
+        });
+
+        return { userByKey, retainersByClient, specialsByClient };
+    }, [allUsers, retainers, specials]);
+
     const availableStaff = useMemo(() => {
         if (!user) return [];
 
         // Filter active users based on role-based assignment rules
-        return allUsers.filter(u => {
+        return sortUsersByName(allUsers.filter(u => {
             if (u.status !== 'Active') return false;
 
             // 1. Staff and Seniors are always assignable
@@ -1031,7 +1429,7 @@ const Clients: React.FC = () => {
             }
 
             return false;
-        });
+        }));
     }, [allUsers, user]);
 
     const canViewService = (assignedStaffStr: string) => {
@@ -1042,11 +1440,7 @@ const Clients: React.FC = () => {
         const staffNames = assignedStaffStr.split(',').map(s => s.trim());
         
         return staffNames.some(staffName => {
-            const staffUser = allUsers.find(u =>
-                u.id === staffName ||
-                `${u.firstName} ${u.lastName}` === staffName ||
-                u.firstName === staffName
-            );
+            const staffUser = clientLookups.userByKey.get(staffName);
             if (!staffUser) return false;
 
             if (user.role === UserRole.SENIOR) {
@@ -1262,14 +1656,14 @@ const Clients: React.FC = () => {
                 if (!user) return false;
                 if (user.role === UserRole.ADMIN || user.role === UserRole.MANAGER || user.role === UserRole.SUPERVISOR) return true;
                 if (!assignedStaffStr) return false;
-                const staffUser = allUsers.find(u => u.id === assignedStaffStr || `${u.firstName} ${u.lastName}` === assignedStaffStr || u.firstName === assignedStaffStr);
+                const staffUser = clientLookups.userByKey.get(assignedStaffStr);
                 if (!staffUser) return false;
                 if (user.role === UserRole.SENIOR) return staffUser.team === user.team;
                 return staffUser.id === user.id;
             };
 
-            const clientRetainers = retainers.filter(r => normalizeId(r.clientId) === targetId && isVisible(r.assignedStaff));
-            const clientSpecials = specials.filter(s => normalizeId(s.clientId) === targetId && isVisible(s.assignedStaff));
+            const clientRetainers = (clientLookups.retainersByClient.get(targetId) || []).filter(r => isVisible(r.assignedStaff));
+            const clientSpecials = (clientLookups.specialsByClient.get(targetId) || []).filter(s => isVisible(s.assignedStaff));
 
             const types = new Set<string>();
             if (clientRetainers.length > 0) types.add('Retainer');
@@ -1310,7 +1704,53 @@ const Clients: React.FC = () => {
         });
 
         return clientList.filter(c => canViewClient(user, c.staff, allUsers));
-    }, [retainers, specials, contextClients, user, allUsers]);
+    }, [contextClients, user, allUsers, clientLookups]);
+
+    const clientsById = useMemo(() => {
+        const lookup = new Map<string, any>();
+        clients.forEach(c => lookup.set(normalizeId(c.id), c));
+        return lookup;
+    }, [clients]);
+
+    const clientFilterOptions = useMemo(() => {
+        const retainerServices = new Set<string>();
+        const specialServices = new Set<string>();
+        const staff = new Set<string>();
+        const activeStaffKeys = new Set<string>();
+
+        allUsers.filter(u => u.status === 'Active').forEach(u => {
+            activeStaffKeys.add(u.id);
+            activeStaffKeys.add(u.username);
+            activeStaffKeys.add(u.firstName);
+            activeStaffKeys.add(`${u.firstName} ${u.lastName}`);
+        });
+
+        clients.forEach(c => {
+            Array.from<string>(c.retainerServices || []).forEach(s => retainerServices.add(s));
+            Array.from<string>(c.specialServices || []).forEach(s => specialServices.add(s));
+            Array.from<string>(c.staff || []).forEach(s => {
+                if (activeStaffKeys.has(s)) staff.add(s);
+            });
+        });
+
+        return {
+            retainerServices: Array.from(retainerServices).sort(),
+            specialServices: Array.from(specialServices).sort(),
+            staff: Array.from(staff).sort()
+        };
+    }, [clients, allUsers]);
+
+    const clientSummary = useMemo(() => {
+        return clients.reduce((acc, c) => {
+            acc.total += 1;
+            if (c.isActive) acc.active += 1;
+            else acc.inactive += 1;
+            if (c.types.has('Retainer')) acc.retainer += 1;
+            if (c.types.has('Special')) acc.special += 1;
+            if (c.types.has('Retainer') && c.types.has('Special')) acc.both += 1;
+            return acc;
+        }, { total: 0, active: 0, inactive: 0, retainer: 0, special: 0, both: 0 });
+    }, [clients]);
 
     // Auto-open client detail modal if open=clientId is in URL query parameters
     useEffect(() => {
@@ -1319,14 +1759,16 @@ const Clients: React.FC = () => {
         const openClientId = params.get('open');
         const openTab = params.get('tab');
         if (openClientId && clients.length > 0) {
-            const normalizeId = (id: any) => String(id || '').trim().replace(/^0+/, '') || '0';
-            const targetClient = clients.find(c => normalizeId(c.id) === normalizeId(openClientId));
+            const targetClient = clientsById.get(normalizeId(openClientId));
             if (targetClient) {
                 setSelectedClient(targetClient);
                 setIsDetailModalOpen(true);
                 
-                if (openTab && ['All', 'Retainer', 'Special'].includes(openTab)) {
-                    setActiveTab(openTab as 'All' | 'Retainer' | 'Special');
+                if (openTab && ['Retainer', 'Special'].includes(openTab)) {
+                    setClientFilters(prev => ({
+                        ...prev,
+                        engagement: openTab === 'Special' ? 'Special Project' : openTab
+                    }));
                 }
                 
                 // Clear search parameter from URL to prevent sticky modal on refresh
@@ -1342,25 +1784,33 @@ const Clients: React.FC = () => {
                 );
             }
         }
-    }, [location.search, clients]);
+    }, [location.search, clients, clientsById]);
 
-    // Calculate displayed clients directly during render for maximum reactivity
-    let displayedClients = clients;
+    const displayedClients = useMemo(() => {
+        const query = searchQuery.trim().toLowerCase();
+        return clients.filter(c => {
+            if (clientFilters.status === 'Active' && !c.isActive) return false;
+            if (clientFilters.status === 'Inactive' && c.isActive) return false;
 
-    // 1. Tab Filtering
-    if (activeTab !== 'All') {
-        displayedClients = clients.filter(c => c.types.has(activeTab) && c.status !== 'Inactive');
-    }
+            if (clientFilters.engagement === 'Retainer' && !c.types.has('Retainer')) return false;
+            if (clientFilters.engagement === 'Special Project' && !c.types.has('Special')) return false;
+            if (clientFilters.engagement === 'Both' && !(c.types.has('Retainer') && c.types.has('Special'))) return false;
+            if (clientFilters.engagement === 'No Engagement' && c.types.size > 0) return false;
 
-    // 2. Search Filtering
-    const query = searchQuery.trim().toLowerCase();
-    if (query) {
-        displayedClients = displayedClients.filter(c =>
-            (c.name || '').toLowerCase().includes(query) ||
-            Array.from<string>(c.types).some(t => t.toLowerCase().includes(query)) ||
-            Array.from<string>(c.staff).some(s => s.toLowerCase().includes(query))
-        );
-    }
+            if (clientFilters.retainerService !== 'All' && !c.retainerServices.has(clientFilters.retainerService)) return false;
+            if (clientFilters.specialService !== 'All' && !c.specialServices.has(clientFilters.specialService)) return false;
+            if (clientFilters.staff !== 'All' && !c.staff.has(clientFilters.staff)) return false;
+
+            if (!query) return true;
+            return (c.name || '').toLowerCase().includes(query) ||
+                (c.tin || '').toLowerCase().includes(query) ||
+                Array.from<string>(c.types).some(t => t.toLowerCase().includes(query)) ||
+                Array.from<string>(c.staff).some(s => s.toLowerCase().includes(query)) ||
+                Array.from<string>(c.retainerServices).some(s => s.toLowerCase().includes(query)) ||
+                Array.from<string>(c.specialServices).some(s => s.toLowerCase().includes(query)) ||
+                (c.specialProjects || []).some((p: any) => String(p.projectTitle || '').toLowerCase().includes(query));
+        }).sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
+    }, [clients, clientFilters, searchQuery]);
 
     const handleAddClient = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -1634,19 +2084,6 @@ const Clients: React.FC = () => {
                 ...data
             });
             
-            // Notify Admins, Managers, Supervisors
-            const notifyRoles = ['Admin', 'Manager', 'Supervisor'];
-            const targets = context?.allUsers.filter(u => notifyRoles.includes(u.role)) || [];
-            for (const target of targets) {
-                await addNotification({
-                    userId: target.id,
-                    title: 'Credential Added',
-                    message: `New credentials added for client ${selectedClient.name} (${data.systemName}).`,
-                    type: 'Client',
-                    link: `/clients?open=${selectedClient.id}`
-                }).catch(() => {});
-            }
-            
             context?.showToast('Credential added successfully!', 'success');
             setShowCredentialForm(false);
             setCredentialFormData({ systemName: '', username: '', password: '', securityAnswer: '', remarks: '' });
@@ -1663,19 +2100,6 @@ const Clients: React.FC = () => {
         setIsSubmitting(true);
         try {
             await updateCredential(editingCredentialId, data);
-            
-            // Notify Admins, Managers, Supervisors
-            const notifyRoles = ['Admin', 'Manager', 'Supervisor'];
-            const targets = context?.allUsers.filter(u => notifyRoles.includes(u.role)) || [];
-            for (const target of targets) {
-                await addNotification({
-                    userId: target.id,
-                    title: 'Credential Updated',
-                    message: `Credentials updated for client ${selectedClient.name} (${data.systemName}).`,
-                    type: 'Client',
-                    link: `/clients?open=${selectedClient.id}`
-                }).catch(() => {});
-            }
             
             context?.showToast('Credential updated successfully!', 'success');
             setEditingCredentialId(null);
@@ -1726,9 +2150,7 @@ const Clients: React.FC = () => {
     };
 
     const getFormattedStaff = (client: typeof displayedClients[0]) => {
-        const relevantStaff = activeTab === 'Retainer' ? client.retainerStaff :
-            activeTab === 'Special' ? client.specialStaff :
-                client.staff;
+        const relevantStaff = client.staff;
 
         const staffList = Array.from(relevantStaff)
             .map(staffId => {
@@ -1758,9 +2180,7 @@ const Clients: React.FC = () => {
                     <h3 className="text-xl font-black text-neutral-dark dark:text-white tracking-tight">No clients found</h3>
                     <p className="text-sm text-secondary/60 font-medium">
                         {searchQuery ? 'No clients match your search query.' :
-                            activeTab === 'Retainer' ? "You don't have any retainer clients assigned yet." :
-                                activeTab === 'Special' ? "You don't have any special project clients assigned yet." :
-                                    "You don't have any clients assigned yet."}
+                            "You don't have any clients assigned yet."}
                     </p>
                 </div>
             );
@@ -1785,9 +2205,7 @@ const Clients: React.FC = () => {
 
 
         const getAssignedUsers = (client: any) => {
-            const relevantStaff = activeTab === 'Retainer' ? client.retainerStaff :
-                activeTab === 'Special' ? client.specialStaff :
-                    client.staff;
+            const relevantStaff = client.staff;
             return Array.from(relevantStaff).map(staffStr => {
                 return allUsers.find(u => u.id === staffStr || u.username === staffStr || u.firstName === staffStr || `${u.firstName} ${u.lastName}` === staffStr);
             }).filter(Boolean);
@@ -1837,12 +2255,12 @@ const Clients: React.FC = () => {
                 sections = Array.from(teamMap.entries())
                     .sort((a, b) => a[0] === 'No Team' ? 1 : b[0] === 'No Team' ? -1 : a[0].localeCompare(b[0]))
                     .map(([team, clients]) => ({ title: `Team: ${team}`, clients }));
-            } else if (groupBy === 'Service') {
+            } else if (groupBy === 'Service' || groupBy === 'RetainerService' || groupBy === 'SpecialService') {
                 const serviceMap = new Map<string, any[]>();
                 displayedClients.forEach(c => {
                     const services = new Set([
-                        ...(activeTab === 'All' || activeTab === 'Retainer' ? Array.from(c.retainerServices) : []),
-                        ...(activeTab === 'All' || activeTab === 'Special' ? Array.from(c.specialServices) : [])
+                        ...(groupBy === 'Service' || groupBy === 'RetainerService' ? Array.from(c.retainerServices) : []),
+                        ...(groupBy === 'Service' || groupBy === 'SpecialService' ? Array.from(c.specialServices) : [])
                     ]);
                     if (services.size === 0) {
                         const list = serviceMap.get('No Active Services') || [];
@@ -1862,16 +2280,13 @@ const Clients: React.FC = () => {
             }
 
             return (
-                <div className="space-y-2 p-1">
-                    {sections.map((section) => (
-                        <ClientTable
-                            key={section.title}
-                            clients={section.clients}
-                            title={section.title}
-                            activeTab={activeTab}
-                            onViewDetails={handleViewDetails}
-                        />
-                    ))}
+                <div className="p-0.5">
+                    <ClientGroupedTable
+                        sections={sections}
+                        activeTab={activeTab}
+                        groupBy={groupBy}
+                        onViewDetails={handleViewDetails}
+                    />
                 </div>
             );
         }
@@ -1943,88 +2358,113 @@ const Clients: React.FC = () => {
                     <p className="text-sm text-secondary dark:text-gray-300 font-medium pl-4 opacity-70 dark:opacity-100">Centralized management of clients and service assignments</p>
                 </div>
 
-                {/* Enhanced Navigation Tabs */}
-                <div className="flex p-1 bg-neutral-light dark:bg-gray-900 rounded-xl shrink-0 border border-neutral-medium dark:border-gray-700">
-                    {isManagerOrAbove && (
-                        <button
-                            onClick={() => setActiveTab('All')}
-                            className={`flex items-center gap-2.5 px-6 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 ${activeTab === 'All'
-                                    ? 'bg-white dark:bg-gray-700 text-primary shadow-lg ring-1 ring-black/[0.03]'
-                                    : 'text-secondary hover:text-neutral-dark dark:hover:text-white hover:bg-black/5'
-                                }`}
-                        >
-                            <Building2 size={16} />
-                            All Clients
-                        </button>
-                    )}
+                {isManagerOrAbove && (
                     <button
-                        onClick={() => setActiveTab('Retainer')}
-                        className={`flex items-center gap-2.5 px-6 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 ${activeTab === 'Retainer'
-                                ? 'bg-white dark:bg-gray-700 text-primary shadow-lg ring-1 ring-black/[0.03]'
-                                : 'text-secondary hover:text-neutral-dark dark:hover:text-white hover:bg-black/5'
-                            }`}
+                        onClick={() => { setIsAddingClient(true); setIsAddModalOpen(true); }}
+                        className="flex items-center justify-center gap-2 px-4 py-2 bg-primary text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-lg shadow-primary/20 transition-all active:scale-95 self-start lg:self-center"
                     >
-                        <FileText size={16} />
-                        Retainers
+                        <Plus size={16} />
+                        Add Client
                     </button>
-                    <button
-                        onClick={() => setActiveTab('Special')}
-                        className={`flex items-center gap-2.5 px-6 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 ${activeTab === 'Special'
-                                ? 'bg-white dark:bg-gray-700 text-primary shadow-lg ring-1 ring-black/[0.03]'
-                                : 'text-secondary hover:text-neutral-dark dark:hover:text-white hover:bg-black/5'
-                            }`}
-                    >
-                        <Briefcase size={16} />
-                        Specials
-                    </button>
-                </div>
+                )}
+            </div>
+
+            <div className="-mt-1">
+                <ClientSummaryStrip summary={clientSummary} />
             </div>
 
             {/* Premium Integrated Toolbar */}
-            <div className="bg-white dark:bg-gray-800 p-1.5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5">
-                <div className="flex flex-col md:flex-row md:items-center gap-2">
+            <div className="bg-white dark:bg-gray-800 p-1 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5">
+                <div className="flex flex-col gap-1">
                     {/* Integrated Search */}
-                    <div className="relative group flex-1">
+                    <div className="relative group w-full">
                         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-secondary/40 dark:text-gray-400/60 group-focus-within:text-primary transition-colors" size={16} />
                         <input
                             type="text"
-                            placeholder="Search client name, staff, or service type..."
+                            placeholder="Search client, TIN, staff, service, or project..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2 bg-neutral-light/50 dark:bg-gray-900/50 border border-transparent focus:border-primary/20 rounded-xl text-[13px] font-medium text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all placeholder:text-secondary/30 dark:placeholder:text-gray-500"
+                            className="w-full pl-10 pr-4 py-1.5 bg-neutral-light/50 dark:bg-gray-900/50 border border-transparent focus:border-primary/20 rounded-xl text-[13px] font-medium text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all placeholder:text-secondary/30 dark:placeholder:text-gray-500"
                         />
                     </div>
 
                     {/* Integrated Actions & Filters */}
-                    <div className="flex items-center gap-2 px-1">
-                        <div className="flex items-center gap-2">
-                            <span className="text-[11px] font-bold text-secondary dark:text-gray-400 hidden sm:block">Group By:</span>
+                    <div className="flex flex-wrap items-center gap-2 px-1">
+                        <select
+                            value={clientFilters.status}
+                            onChange={(e) => setClientFilters(prev => ({ ...prev, status: e.target.value }))}
+                            className="pl-3 pr-8 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/40 dark:border-gray-700/70 rounded-xl text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer"
+                            style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%236b7280\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'%3E%3C/path%3E%3C/svg%3E")', backgroundPosition: 'right 0.5rem center', backgroundRepeat: 'no-repeat', backgroundSize: '1rem' }}
+                        >
+                            <option value="All">All Status</option>
+                            <option value="Active">Active</option>
+                            <option value="Inactive">Inactive</option>
+                        </select>
+
+                        <select
+                            value={clientFilters.engagement}
+                            onChange={(e) => handleEngagementFilterChange(e.target.value)}
+                            className="pl-3 pr-8 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/40 dark:border-gray-700/70 rounded-xl text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer"
+                            style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%236b7280\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'%3E%3C/path%3E%3C/svg%3E")', backgroundPosition: 'right 0.5rem center', backgroundRepeat: 'no-repeat', backgroundSize: '1rem' }}
+                        >
+                            <option value="All">All Engagements</option>
+                            <option value="Retainer">Retainer</option>
+                            <option value="Special Project">Special Project</option>
+                            <option value="Both">Both</option>
+                            <option value="No Engagement">No Engagement</option>
+                        </select>
+
+                        {clientFilters.engagement === 'Retainer' && (
+                            <select
+                                value={clientFilters.retainerService}
+                                onChange={(e) => setClientFilters(prev => ({ ...prev, retainerService: e.target.value }))}
+                                className="pl-3 pr-8 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/40 dark:border-gray-700/70 rounded-xl text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer max-w-[220px]"
+                                style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%236b7280\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'%3E%3C/path%3E%3C/svg%3E")', backgroundPosition: 'right 0.5rem center', backgroundRepeat: 'no-repeat', backgroundSize: '1rem' }}
+                            >
+                                <option value="All">All Retainer Services</option>
+                                {clientFilterOptions.retainerServices.map(service => <option key={service} value={service}>{service}</option>)}
+                            </select>
+                        )}
+
+                        {clientFilters.engagement === 'Special Project' && (
+                            <select
+                                value={clientFilters.specialService}
+                                onChange={(e) => setClientFilters(prev => ({ ...prev, specialService: e.target.value }))}
+                                className="pl-3 pr-8 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/40 dark:border-gray-700/70 rounded-xl text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer max-w-[220px]"
+                                style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%236b7280\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'%3E%3C/path%3E%3C/svg%3E")', backgroundPosition: 'right 0.5rem center', backgroundRepeat: 'no-repeat', backgroundSize: '1rem' }}
+                            >
+                                <option value="All">All Special Project Types</option>
+                                {clientFilterOptions.specialServices.map(service => <option key={service} value={service}>{service}</option>)}
+                            </select>
+                        )}
+
+                        <select
+                            value={clientFilters.staff}
+                            onChange={(e) => setClientFilters(prev => ({ ...prev, staff: e.target.value }))}
+                            className="pl-3 pr-8 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/40 dark:border-gray-700/70 rounded-xl text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer max-w-[180px]"
+                            style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%236b7280\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'%3E%3C/path%3E%3C/svg%3E")', backgroundPosition: 'right 0.5rem center', backgroundRepeat: 'no-repeat', backgroundSize: '1rem' }}
+                        >
+                            <option value="All">All Staff</option>
+                            {clientFilterOptions.staff.map(staff => <option key={staff} value={staff}>{staff}</option>)}
+                        </select>
+
+                        <div className="flex items-center gap-2 ml-auto">
+                            <span className="text-[11px] font-bold text-secondary dark:text-gray-400 hidden sm:block">Group by</span>
                             <select
                                 value={groupBy}
                                 onChange={(e) => setGroupBy(e.target.value as any)}
-                                className="pl-3 pr-8 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-transparent hover:border-neutral-medium/50 rounded-xl text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer min-w-[140px]"
+                                className="pl-3 pr-8 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/40 dark:border-gray-700/70 rounded-xl text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer min-w-[150px]"
                                 style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%236b7280\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'%3E%3C/path%3E%3C/svg%3E")', backgroundPosition: 'right 0.5rem center', backgroundRepeat: 'no-repeat', backgroundSize: '1rem' }}
                             >
                                 <option value="None">No Grouping</option>
                                 {user?.role !== UserRole.SENIOR && <option value="Team">By Team</option>}
                                 <option value="Staff">By Staff</option>
-                                <option value="Service">By Service</option>
+                                <option value="Service">By Any Service</option>
+                                <option value="RetainerService">By Retainer Service</option>
+                                <option value="SpecialService">By Special Project Type</option>
                             </select>
                         </div>
 
-                        <div className="w-px h-6 bg-neutral-medium dark:bg-gray-700 mx-1 hidden md:block" />
-
-                        <div className="flex items-center gap-2">
-                            {isManagerOrAbove && (
-                                <button
-                                    onClick={() => { setIsAddingClient(true); setIsAddModalOpen(true); }}
-                                    className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-lg shadow-primary/20 transition-all active:scale-95"
-                                >
-                                    <Plus size={16} />
-                                    Add Client
-                                </button>
-                            )}
-                        </div>
                     </div>
                 </div>
             </div>
@@ -2037,19 +2477,18 @@ const Clients: React.FC = () => {
                 {renderContent()}
             </div>
 
-            {/* Modern Add Client Modal - Now Ultra-Compact */}
+            {/* Modern Add Client Modal */}
             {isAddModalOpen && createPortal(
                 <div className="fixed inset-0 z-[10001] flex items-center justify-center p-4 bg-neutral-dark/40 backdrop-blur-sm animate-in fade-in duration-300">
-                    <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-md rounded-[2rem] shadow-2xl border border-white dark:border-gray-700 w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-300">
-                        {/* Modal Header - Compact */}
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-medium dark:border-gray-700 bg-neutral-light/30 dark:bg-gray-900/30">
+                    <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-md rounded-3xl shadow-2xl border border-white dark:border-gray-700 w-full max-w-2xl max-h-[92vh] overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-medium/70 dark:border-gray-700 bg-neutral-light/30 dark:bg-gray-900/30 shrink-0">
                             <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 bg-primary/10 rounded-xl flex items-center justify-center text-primary border border-primary/20">
-                                    <Building2 size={18} />
+                                <div className="w-10 h-10 bg-primary/10 rounded-2xl flex items-center justify-center text-primary border border-primary/20">
+                                    <Building2 size={19} />
                                 </div>
                                 <div>
-                                    <h2 className="text-base font-black text-neutral-dark dark:text-white tracking-tight leading-tight">Create Client Profile</h2>
-                                    <p className="text-[8px] font-black uppercase tracking-[0.2em] text-secondary opacity-50 mt-0.5">Registration & Directory Entry</p>
+                                    <h2 className="text-lg font-black text-neutral-dark dark:text-white tracking-tight leading-tight">Create Client Profile</h2>
+                                    <p className="text-[10px] font-bold text-secondary dark:text-gray-400 mt-1">Add the basic identity and contact details for this client.</p>
                                 </div>
                             </div>
                             <button
@@ -2061,113 +2500,116 @@ const Clients: React.FC = () => {
                             </button>
                         </div>
 
-                        <form onSubmit={handleAddClient} className="p-6 space-y-4">
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                                <div className="space-y-1 col-span-2">
-                                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.15em] ml-1 opacity-60 dark:opacity-100">Company Legal Name</label>
+                        <form onSubmit={handleAddClient} className="p-5 space-y-4 overflow-y-auto">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+                                <div className="space-y-1.5 sm:col-span-2">
+                                    <label className="text-[10px] font-black text-secondary dark:text-gray-400">Company Legal Name</label>
                                     <input
                                         required
                                         type="text"
                                         disabled={isSubmitting}
                                         value={formData.name}
                                         onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                                        className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all placeholder:text-secondary/30 dark:placeholder:text-gray-500 disabled:opacity-50"
+                                        className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all placeholder:text-secondary/30 dark:placeholder:text-gray-500 disabled:opacity-50"
                                         placeholder="Enter registered business name..."
                                     />
                                 </div>
-                                <div className="space-y-1">
-                                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.15em] ml-1 opacity-60 dark:opacity-100">TIN</label>
+
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-secondary dark:text-gray-400">TIN</label>
                                     <input
                                         required
                                         type="text"
                                         disabled={isSubmitting}
                                         value={formData.tin}
                                         onChange={(e) => setFormData({ ...formData, tin: formatTIN(e.target.value) })}
-                                        className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-mono font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all disabled:opacity-50"
+                                        className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-mono font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all disabled:opacity-50"
                                         placeholder="000-000-000-000"
                                     />
+                                    <p className="text-[9px] font-medium text-secondary/60 dark:text-gray-500">12 digits required.</p>
                                 </div>
-                                <div className="space-y-1">
-                                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.15em] ml-1 opacity-60 dark:opacity-100">Classification</label>
+
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-secondary dark:text-gray-400">Entity Type</label>
                                     <select
                                         value={formData.entityType}
                                         disabled={isSubmitting}
                                         onChange={(e) => setFormData({ ...formData, entityType: e.target.value })}
-                                        className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all disabled:opacity-50"
+                                        className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all disabled:opacity-50"
                                     >
                                         <option value="Corporation">Corporation</option>
                                         <option value="Partnership">Partnership</option>
                                         <option value="Individual">Individual</option>
                                     </select>
                                 </div>
-                                <div className="space-y-1">
-                                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.15em] ml-1 opacity-60 dark:opacity-100">Official Email</label>
+
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-secondary dark:text-gray-400">Official Email</label>
                                     <input
                                         required
                                         type="email"
                                         disabled={isSubmitting}
                                         value={formData.email}
                                         onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                                        className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all disabled:opacity-50"
+                                        className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all disabled:opacity-50"
                                         placeholder="admin@client.com"
                                     />
                                 </div>
-                                <div className="space-y-1">
-                                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.15em] ml-1 opacity-60 dark:opacity-100">Primary Contact</label>
+
+                                <div className="space-y-1.5">
+                                    <label className="text-[10px] font-black text-secondary dark:text-gray-400">Primary Contact</label>
                                     <input
                                         required
                                         type="text"
                                         disabled={isSubmitting}
                                         value={formData.contactPerson}
                                         onChange={(e) => setFormData({ ...formData, contactPerson: e.target.value })}
-                                        className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all disabled:opacity-50"
+                                        className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all disabled:opacity-50"
                                         placeholder="Full name..."
                                     />
                                 </div>
-                                <div className="space-y-1 col-span-2">
-                                    <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.15em] ml-1 opacity-60 dark:opacity-100">Fiscal Year End</label>
-                                    <div className="flex gap-2">
-                                        <div className="flex-1">
-                                            <select
-                                                value={formData.fiscalYearEnd.split('/')[0] || '12'}
-                                                disabled={isSubmitting}
-                                                onChange={(e) => {
-                                                    const day = formData.fiscalYearEnd.split('/')[1] || '31';
-                                                    setFormData({ ...formData, fiscalYearEnd: `${e.target.value}/${day}` });
-                                                }}
-                                                className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all disabled:opacity-50"
-                                            >
-                                                {monthsList.map(m => (
-                                                    <option key={m.value} value={m.value}>{m.label}</option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                        <div className="w-20">
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                max="31"
-                                                placeholder="Day"
-                                                disabled={isSubmitting}
-                                                value={formData.fiscalYearEnd.split('/')[1] || ''}
-                                                onChange={(e) => {
-                                                    const month = formData.fiscalYearEnd.split('/')[0] || '12';
-                                                    let val = e.target.value.replace(/\D/g, '');
-                                                    if (val) {
-                                                        let num = parseInt(val);
-                                                        if (num > 31) num = 31;
-                                                        val = num.toString().padStart(2, '0');
-                                                    }
-                                                    setFormData({ ...formData, fiscalYearEnd: `${month}/${val}` });
-                                                }}
-                                                className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all placeholder:text-secondary/30 disabled:opacity-50 text-center"
-                                            />
-                                        </div>
+
+                                <div className="space-y-1.5 sm:col-span-2">
+                                    <label className="text-[10px] font-black text-secondary dark:text-gray-400">Fiscal Year End</label>
+                                    <div className="grid grid-cols-[1fr_88px] gap-3">
+                                        <select
+                                            value={formData.fiscalYearEnd.split('/')[0] || '12'}
+                                            disabled={isSubmitting}
+                                            onChange={(e) => {
+                                                const day = formData.fiscalYearEnd.split('/')[1] || '31';
+                                                setFormData({ ...formData, fiscalYearEnd: `${e.target.value}/${day}` });
+                                            }}
+                                            className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all disabled:opacity-50"
+                                        >
+                                            {monthsList.map(m => (
+                                                <option key={m.value} value={m.value}>{m.label}</option>
+                                            ))}
+                                        </select>
+
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="31"
+                                            placeholder="31"
+                                            disabled={isSubmitting}
+                                            value={formData.fiscalYearEnd.split('/')[1] || ''}
+                                            onChange={(e) => {
+                                                const month = formData.fiscalYearEnd.split('/')[0] || '12';
+                                                let val = e.target.value.replace(/\D/g, '');
+                                                if (val) {
+                                                    let num = parseInt(val);
+                                                    if (num > 31) num = 31;
+                                                    val = num.toString().padStart(2, '0');
+                                                }
+                                                setFormData({ ...formData, fiscalYearEnd: `${month}/${val}` });
+                                            }}
+                                            className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all placeholder:text-secondary/30 disabled:opacity-50 text-center"
+                                        />
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="pt-4 border-t border-neutral-medium dark:border-gray-700 mt-2">
+                            <div className="sticky bottom-0 -mx-5 -mb-5 px-5 py-4 bg-white/95 dark:bg-gray-800/95 border-t border-neutral-medium/70 dark:border-gray-700">
                                 <button
                                     type="submit"
                                     disabled={isSubmitting}
@@ -2185,9 +2627,9 @@ const Clients: React.FC = () => {
 
             {/* Modern Side Drawer for Client Details */}
             {isDetailModalOpen && selectedClient && createPortal(
-                <div className="fixed inset-0 z-[10000] flex justify-end animate-in fade-in duration-300">
+                <div className="fixed inset-0 z-[10000] overflow-hidden animate-in fade-in duration-300">
                     <div
-                        className="absolute inset-0 bg-neutral-dark/40 backdrop-blur-[2px] transition-opacity"
+                        className="absolute inset-0 bg-neutral-dark/40 backdrop-blur-sm transition-opacity"
                         onClick={() => {
                             setIsDetailModalOpen(false);
                             setIsEditing(false);
@@ -2196,74 +2638,86 @@ const Clients: React.FC = () => {
                         }}
                     />
 
-                    <div className="relative w-full max-w-2xl bg-white dark:bg-gray-900 h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
+                    <div className="absolute inset-y-0 right-0 max-w-2xl w-full bg-white dark:bg-gray-900 shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
                         {/* Drawer Header */}
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-medium dark:border-gray-800 bg-neutral-light/30 dark:bg-gray-800/30 backdrop-blur-md sticky top-0 z-10">
-                            <div className="flex items-center gap-5">
-                                <div className="w-10 h-10 bg-gradient-to-br from-primary/10 to-primary/5 rounded-xl flex items-center justify-center text-primary border border-primary/10 shadow-sm">
-                                    <Building2 size={20} />
-                                </div>
-                                <div>
-                                    <div className="flex items-center gap-3 mb-1">
-                                        <h2 className="text-xl font-black text-neutral-dark dark:text-white tracking-tight leading-tight">{selectedClient.name}</h2>
+                        <div className="p-5 border-b border-neutral-medium dark:border-gray-800 bg-neutral-light/30 dark:bg-gray-800/30 space-y-4">
+                            <div className="flex items-start justify-between gap-4">
+                                <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                                        <span className="bg-rose-50 text-rose-600 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider">
+                                            Client Profile
+                                        </span>
                                         {(() => {
                                             const isActive = selectedClient.status?.toLowerCase().includes('active') && !selectedClient.status?.toLowerCase().includes('inactive');
                                             return (
-                                                <div className={`px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-[0.15em] border flex items-center gap-1.5 shadow-sm ${isActive
+                                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border ${isActive
                                                         ? 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
                                                         : 'bg-neutral-50 text-secondary border-neutral-200 dark:bg-gray-700/50 dark:text-gray-400 dark:border-gray-700'
                                                     }`}>
-                                                    <div className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-500 animate-pulse' : 'bg-secondary/40'}`} />
                                                     {selectedClient.status || 'Active'}
-                                                </div>
+                                                </span>
                                             );
                                         })()}
                                     </div>
-                                    <div className="flex items-center gap-3">
-                                        <span className="text-[9px] font-black uppercase tracking-widest text-primary bg-primary/5 px-2 py-0.5 rounded border border-primary/10">
-                                            TIN: {selectedClient.tin || 'Unregistered'}
-                                        </span>
+                                    <h2 className="text-xl font-black text-neutral-dark dark:text-white leading-tight">
+                                        {selectedClient.name}
+                                    </h2>
+                                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-bold text-secondary dark:text-gray-400">
+                                        <span>TIN {selectedClient.tin || 'Unregistered'}</span>
+                                        <span className="hidden sm:inline text-secondary/30">|</span>
+                                        <span>{selectedClient.entityType || 'Unclassified'}</span>
                                     </div>
                                 </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                {!isEditing && (
+                                <div className="flex items-center gap-2">
+                                    {!isEditing && (
+                                        <button
+                                            onClick={() => setIsEditing(true)}
+                                            className="p-2 hover:bg-neutral-medium/20 dark:hover:bg-gray-800 rounded-full transition-colors text-secondary"
+                                            title="Edit Profile"
+                                        >
+                                            <Edit2 size={18} />
+                                        </button>
+                                    )}
                                     <button
-                                        onClick={() => setIsEditing(true)}
-                                        className="p-2.5 text-secondary hover:bg-neutral-medium/50 dark:hover:bg-gray-700 rounded-2xl transition-all duration-300 hover:scale-105"
-                                        title="Edit Profile"
+                                        disabled={isSubmitting}
+                                        onClick={() => {
+                                            setIsDetailModalOpen(false);
+                                            setIsEditing(false);
+                                            resetAssignmentForm();
+                                            resetCredentialForm();
+                                        }}
+                                        className="p-2 hover:bg-neutral-medium/20 dark:hover:bg-gray-800 rounded-full transition-colors text-secondary disabled:opacity-30 disabled:cursor-not-allowed"
                                     >
-                                        <Edit2 size={20} />
+                                        <X size={20} />
                                     </button>
-                                )}
-                                <button
-                                    disabled={isSubmitting}
-                                    onClick={() => {
-                                        setIsDetailModalOpen(false);
-                                        setIsEditing(false);
-                                        resetAssignmentForm();
-                                        resetCredentialForm();
-                                    }}
-                                    className="p-2.5 text-secondary hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/10 dark:hover:text-rose-400 rounded-2xl transition-all duration-300 hover:scale-105 disabled:opacity-30 disabled:cursor-not-allowed"
-                                >
-                                    <X size={24} />
-                                </button>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                                {[
+                                    { id: 'client-overview', label: 'Overview' },
+                                    { id: 'client-retainers', label: 'Retainers' },
+                                    { id: 'client-specials', label: 'Special Projects' },
+                                    { id: 'client-credentials', label: 'Credentials' }
+                                ].map(item => (
+                                    <button
+                                        key={item.id}
+                                        type="button"
+                                        onClick={() => document.getElementById(item.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                                        className="shrink-0 px-3 py-1.5 rounded-xl bg-white/80 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 text-[10px] font-black text-secondary dark:text-gray-300 hover:text-primary hover:border-primary/20 transition-colors"
+                                    >
+                                        {item.label}
+                                    </button>
+                                ))}
                             </div>
                         </div>
 
                         {/* Drawer Content */}
                         <div className="flex-1 overflow-y-auto p-8 space-y-8 bg-gradient-to-br from-neutral-light/50 via-white to-primary/5 dark:from-gray-900 dark:via-gray-900 dark:to-primary/10 custom-scrollbar">
                             {/* Profile Information */}
-                            <div className="space-y-4">
-                                <div className="flex items-center gap-2">
-                                    <div className="w-1 h-4 bg-primary rounded-full" />
-                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">
-                                        Account Details
-                                    </h3>
-                                </div>
+                            <ClientDrawerSection id="client-overview" title="Account Details" defaultOpen>
 
                                 {isEditing ? (
-                                    <form id="editClientForm" onSubmit={handleUpdateClient} className="grid grid-cols-2 gap-3 animate-in fade-in duration-300 bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 p-6">
+                                    <form id="editClientForm" onSubmit={handleUpdateClient} className="grid grid-cols-2 gap-3 animate-in fade-in duration-300 bg-white/85 dark:bg-gray-800/60 rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm shadow-neutral-dark/5 p-5">
                                         <div className="space-y-1.5 col-span-2">
                                             <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1 opacity-50 dark:opacity-100">Company Legal Name</label>
                                             <input
@@ -2387,40 +2841,37 @@ const Clients: React.FC = () => {
                                         </div>
                                     </form>
                                 ) : (
-                                    <div className="grid grid-cols-2 gap-x-8 gap-y-6 bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 p-6 relative overflow-hidden group">
-                                        <div className="absolute -top-24 -right-24 w-48 h-48 bg-primary/5 rounded-full blur-3xl transition-all group-hover:bg-primary/10" />
-                                        <div className="space-y-1 relative z-1">
-                                            <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Entity Type</p>
-                                            <p className="text-sm font-black text-neutral-dark dark:text-white tracking-tight">{selectedClient.entityType}</p>
+                                    <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-5">
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black text-secondary dark:text-gray-400">Entity Type</p>
+                                            <p className="text-sm font-black text-neutral-dark dark:text-white">{selectedClient.entityType}</p>
                                         </div>
-                                        <div className="space-y-1 relative z-1">
-                                            <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Fiscal Year End</p>
-                                            <p className="text-sm font-black text-neutral-dark dark:text-white tracking-tight">{selectedClient.fiscalYearEnd || '---'}</p>
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black text-secondary dark:text-gray-400">Fiscal Year End</p>
+                                            <p className="text-sm font-black text-neutral-dark dark:text-white">{selectedClient.fiscalYearEnd || '---'}</p>
                                         </div>
-                                        <div className="space-y-1 relative z-1">
-                                            <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Contact Person</p>
-                                            <p className="text-sm font-black text-neutral-dark dark:text-white tracking-tight">{selectedClient.contactPerson || '---'}</p>
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black text-secondary dark:text-gray-400">Contact Person</p>
+                                            <p className="text-sm font-black text-neutral-dark dark:text-white">{selectedClient.contactPerson || '---'}</p>
                                         </div>
-                                        <div className="space-y-1 relative z-1">
-                                            <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Official Email</p>
-                                            <p className="text-sm font-black text-primary tracking-tight truncate" title={selectedClient.email}>{selectedClient.email || '---'}</p>
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black text-secondary dark:text-gray-400">Official Email</p>
+                                            <p className="text-sm font-black text-primary truncate" title={selectedClient.email}>{selectedClient.email || '---'}</p>
+                                        </div>
                                         </div>
                                     </div>
                                 )}
-                            </div>
+                            </ClientDrawerSection>
 
                             {/* Active Retainer Engagements */}
                             {(activeTab === 'All' || activeTab === 'Retainer') && (
-                                <div className="space-y-4">
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-1 h-4 bg-primary rounded-full" />
-                                        <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">
-                                            Retainer Services
-                                        </h3>
-                                    </div>
-
-                                    {canModifyAssignment && (
+                                <ClientDrawerSection
+                                    id="client-retainers"
+                                    title="Retainer Services"
+                                    count={retainers.filter(r => normalizeId(r.clientId) === normalizeId(selectedClient.id) && canViewService(r.assignedStaff)).length}
+                                    defaultOpen
+                                    action={canModifyAssignment && (
                                         <button
                                             onClick={() => {
                                                 if (showAssignmentForm) {
@@ -2439,11 +2890,11 @@ const Clients: React.FC = () => {
                                             {showAssignmentForm ? 'Cancel' : 'Add Service'}
                                         </button>
                                     )}
-                                </div>
+                                >
 
                                 {showAssignmentForm && !editingRetainerId && (
                                     <div className="space-y-4 animate-in zoom-in-95 duration-200">
-                                        <div className="bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-emerald-500/30 dark:border-emerald-500/20 shadow-xl shadow-primary/5 p-6 space-y-4">
+                                        <div className="bg-white/85 dark:bg-gray-800/60 rounded-2xl border border-emerald-500/30 dark:border-emerald-500/20 shadow-sm shadow-neutral-dark/5 p-5 space-y-4">
                                             <div className="flex items-center justify-between">
                                                 <h4 className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest flex items-center gap-2">
                                                     <Layers size={12} className="text-emerald-500" />
@@ -2468,7 +2919,7 @@ const Clients: React.FC = () => {
                                                     />
                                                 ))}
 
-                                                <div className="flex flex-col gap-4 pt-6 mt-2 border-t border-neutral-medium dark:border-gray-700">
+                                                <div className="flex flex-col gap-3 pt-4 mt-1 border-t border-neutral-medium/60 dark:border-gray-700">
                                                     {!editingRetainerId && (
                                                         <button
                                                             type="button"
@@ -2498,7 +2949,7 @@ const Clients: React.FC = () => {
                                 )}
 
                                 {/* Existing Assigned Retainers List */}
-                                <div className="space-y-3">
+                                <div className="space-y-2">
                                     {retainers.filter(r => {
                                         return normalizeId(r.clientId) === normalizeId(selectedClient.id) && canViewService(r.assignedStaff);
                                     }).map((r) => {
@@ -2506,7 +2957,7 @@ const Clients: React.FC = () => {
                                         
                                         if (isEditingThis) {
                                             return (
-                                                <div key={r.id} className="bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-primary/30 dark:border-primary/20 shadow-xl shadow-primary/10 p-6 space-y-4 animate-in zoom-in-95 duration-200">
+                                                <div key={r.id} className="bg-white/85 dark:bg-gray-800/60 rounded-2xl border border-primary/30 dark:border-primary/20 shadow-sm shadow-neutral-dark/5 p-5 space-y-4 animate-in zoom-in-95 duration-200">
                                                     <div className="flex items-center justify-between">
                                                         <h4 className="text-[10px] font-black text-primary uppercase tracking-widest flex items-center gap-2">
                                                             <Edit2 size={12} />
@@ -2554,21 +3005,20 @@ const Clients: React.FC = () => {
                                         }
 
                                         return (
-                                            <div key={r.id} className="bg-white/60 dark:bg-gray-800/40 backdrop-blur-sm rounded-[1.5rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 p-4 relative overflow-hidden group hover:shadow-2xl hover:shadow-primary/10 hover:-translate-y-1 transition-all duration-300">
-                                                <div className="flex items-center justify-between relative z-1">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
-                                                            <FileText size={16} />
+                                            <div key={r.id} className="bg-white/85 dark:bg-gray-800/70 rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm px-4 py-3 group hover:border-primary/20 hover:shadow-md transition-all duration-300">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div className="flex items-center gap-3 min-w-0">
+                                                        <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center text-primary shrink-0">
+                                                            <FileText size={14} />
                                                         </div>
-                                                        <div>
-                                                            <h4 className="text-[11px] font-black text-neutral-dark dark:text-white leading-tight uppercase tracking-tight">{r.serviceName || r.serviceType}</h4>
-                                                            <div className="flex items-center gap-1.5 mt-0.5 text-secondary">
-                                                                <UserIcon size={10} className="opacity-40" />
-                                                                <p className="text-[9px] font-bold opacity-70">{r.assignedStaff}</p>
-                                                            </div>
+                                                        <div className="min-w-0">
+                                                            <h4 className="text-[13px] font-black text-neutral-dark dark:text-white leading-tight truncate">{r.serviceName || r.serviceType || 'Untitled Service'}</h4>
+                                                            <p className="text-[10px] font-bold text-secondary/70 dark:text-gray-400 truncate">
+                                                                Assigned to {r.assignedStaff || 'Unassigned'} · {r.engagementStatus || r.status || 'Active'}
+                                                            </p>
                                                         </div>
                                                     </div>
-                                                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0 relative z-10">
+                                                     <div className="flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-all shrink-0">
                                                          <button
                                                              onClick={() => handleEditRetainer(r)}
                                                              className="p-2 text-secondary hover:text-primary hover:bg-primary/10 rounded-xl transition-all"
@@ -2587,7 +3037,6 @@ const Clients: React.FC = () => {
                                                          )}
                                                      </div>
                                                 </div>
-                                                <div className="absolute -bottom-10 -right-10 w-24 h-24 bg-primary/5 rounded-full blur-2xl opacity-0 group-hover:opacity-100 transition-opacity" />
                                             </div>
                                         );
                                     })}
@@ -2600,20 +3049,17 @@ const Clients: React.FC = () => {
                                             </div>
                                         )}
                                 </div>
-                            </div>
+                            </ClientDrawerSection>
                         )}
 
                             {/* Special Engagements Section */}
                             {(activeTab === 'All' || activeTab === 'Special') && (
-                                <div className="space-y-4">
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-1 h-4 bg-primary rounded-full" />
-                                        <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">
-                                            Special Engagements
-                                        </h3>
-                                    </div>
-                                    {canModifyAssignment && (
+                                <ClientDrawerSection
+                                    id="client-specials"
+                                    title="Special Engagements"
+                                    count={specials.filter(s => normalizeId(s.clientId) === normalizeId(selectedClient.id) && canViewService(s.assignedStaff)).length}
+                                    defaultOpen
+                                    action={canModifyAssignment && (
                                         <button
                                             onClick={() => {
                                                 if (showSpecialForm) {
@@ -2632,11 +3078,11 @@ const Clients: React.FC = () => {
                                             {showSpecialForm ? 'Cancel' : 'Add Special'}
                                         </button>
                                     )}
-                                </div>
+                                >
 
                                 {showSpecialForm && !editingSpecialId && (
                                     <div className="space-y-4 animate-in zoom-in-95 duration-200">
-                                        <div className="bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-emerald-500/30 dark:border-emerald-500/20 shadow-xl shadow-primary/5 p-6 space-y-4">
+                                        <div className="bg-white/85 dark:bg-gray-800/60 rounded-2xl border border-emerald-500/30 dark:border-emerald-500/20 shadow-sm shadow-neutral-dark/5 p-5 space-y-4">
                                             <div className="flex items-center justify-between">
                                                 <h4 className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest flex items-center gap-2">
                                                     <Briefcase size={12} className="text-emerald-500" />
@@ -2657,7 +3103,7 @@ const Clients: React.FC = () => {
                                                     />
                                                 ))}
 
-                                                <div className="flex flex-col gap-4 pt-6 mt-2 border-t border-neutral-medium dark:border-gray-700">
+                                                <div className="flex flex-col gap-3 pt-4 mt-1 border-t border-neutral-medium/60 dark:border-gray-700">
                                                     {!editingSpecialId && (
                                                         <button
                                                             type="button"
@@ -2686,7 +3132,7 @@ const Clients: React.FC = () => {
                                     </div>
                                 )}
                                 { /* Existing Specials List */ }
-                                <div className="space-y-3">
+                                <div className="space-y-2">
                                     {specials.filter(s => {
                                         return normalizeId(s.clientId) === normalizeId(selectedClient.id) && canViewService(s.assignedStaff);
                                     }).map((s) => {
@@ -2694,7 +3140,7 @@ const Clients: React.FC = () => {
 
                                         if (isEditingThis) {
                                             return (
-                                                <div key={s.id} className="bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-primary/30 dark:border-primary/20 shadow-xl shadow-primary/10 p-6 space-y-4 animate-in zoom-in-95 duration-200">
+                                                <div key={s.id} className="bg-white/85 dark:bg-gray-800/60 rounded-2xl border border-primary/30 dark:border-primary/20 shadow-sm shadow-neutral-dark/5 p-5 space-y-4 animate-in zoom-in-95 duration-200">
                                                     <div className="flex items-center justify-between">
                                                         <h4 className="text-[10px] font-black text-primary uppercase tracking-widest flex items-center gap-2">
                                                             <Edit2 size={12} />
@@ -2738,29 +3184,20 @@ const Clients: React.FC = () => {
                                         }
 
                                         return (
-                                            <div key={s.id} className="bg-white/60 dark:bg-gray-800/40 backdrop-blur-sm rounded-[1.5rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 p-4 relative overflow-hidden group hover:shadow-2xl hover:shadow-primary/10 hover:-translate-y-1 transition-all duration-300">
-                                                <div className="flex items-center justify-between mb-2 relative z-1">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-600 group-hover:scale-110 transition-transform">
-                                                            <Briefcase size={16} />
+                                            <div key={s.id} className="bg-white/85 dark:bg-gray-800/70 rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm px-4 py-3 group hover:border-primary/20 hover:shadow-md transition-all duration-300">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div className="flex items-center gap-3 min-w-0">
+                                                        <div className="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-600 shrink-0">
+                                                            <Briefcase size={14} />
                                                         </div>
-                                                        <div>
-                                                            <div className="flex items-center gap-2">
-                                                                <p className="text-[11px] font-black text-neutral-dark dark:text-white leading-tight uppercase tracking-tight">{s.projectTitle || 'Untitled Project'}</p>
-                                                                <div className="w-1 h-1 rounded-full bg-neutral-medium dark:bg-gray-700 opacity-30" />
-                                                                <p className={`text-[9px] font-black uppercase tracking-widest ${s.status === 'Completed' ? 'text-emerald-600' :
-                                                                        s.status === 'In Progress' ? 'text-amber-600' :
-                                                                            s.status === 'Blocked' ? 'text-rose-600' :
-                                                                                'text-blue-600'
-                                                                    }`}>{s.status}</p>
-                                                            </div>
-                                                            <div className="flex items-center gap-1.5 mt-0.5 text-secondary">
-                                                                <UserIcon size={10} className="opacity-40" />
-                                                                <p className="text-[9px] font-bold opacity-70">{s.assignedStaff}</p>
-                                                            </div>
+                                                        <div className="min-w-0">
+                                                            <h4 className="text-[13px] font-black text-neutral-dark dark:text-white leading-tight truncate">{s.projectTitle || 'Untitled Project'}</h4>
+                                                            <p className="text-[10px] font-bold text-secondary/70 dark:text-gray-400 truncate">
+                                                                Assigned to {s.assignedStaff || 'Unassigned'} · {s.status || 'Planning'}{s.endDate ? ` · Due ${s.endDate}` : ''}
+                                                            </p>
                                                         </div>
                                                     </div>
-                                                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0 relative z-10">
+                                                     <div className="flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-all shrink-0">
                                                          <button 
                                                             onClick={() => handleEditSpecial(s)} 
                                                             className="p-2 text-secondary hover:text-primary hover:bg-primary/10 rounded-xl transition-all"
@@ -2779,8 +3216,9 @@ const Clients: React.FC = () => {
                                                          )}
                                                      </div>
                                                 </div>
-                                                <p className="text-[10px] text-secondary font-medium leading-relaxed opacity-60 pl-11 line-clamp-1 relative z-1">{s.description || 'No description provided.'}</p>
-                                                <div className="absolute -bottom-10 -right-10 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl opacity-0 group-hover:opacity-100 transition-opacity" />
+                                                {s.description && (
+                                                    <p className="text-[10px] text-secondary font-medium leading-relaxed opacity-60 pl-11 mt-2 line-clamp-1">{s.description}</p>
+                                                )}
                                             </div>
                                         );
                                     })}
@@ -2792,18 +3230,16 @@ const Clients: React.FC = () => {
                                             </div>
                                         )}
                                 </div>
-                            </div>
+                            </ClientDrawerSection>
                         )}
 
                             {/* Client Credentials Section */}
-                            <div className="space-y-4 pt-6 border-t border-neutral-medium/50 dark:border-gray-700/50 mt-4">
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-1 h-4 bg-primary rounded-full" />
-                                        <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">
-                                            System Credentials
-                                        </h3>
-                                    </div>
+                            <ClientDrawerSection
+                                id="client-credentials"
+                                title="System Credentials"
+                                count={(context?.credentials || []).filter(c => normalizeId(c.clientID) === normalizeId(selectedClient.id)).length}
+                                defaultOpen={false}
+                                action={
                                     <button
                                         onClick={() => {
                                             if (showCredentialForm) {
@@ -2816,13 +3252,14 @@ const Clients: React.FC = () => {
                                         }}
                                         className={`text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl transition-all ${showCredentialForm
                                                 ? 'bg-rose-50 text-rose-600 hover:bg-rose-100 dark:bg-rose-500/10 dark:text-rose-400'
-                                                : 'bg-primary/10 text-primary hover:bg-primary/20'
+                                                : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400'
                                             }`}
                                     >
                                         {showCredentialForm ? <X size={12} /> : <Plus size={12} />}
                                         {showCredentialForm ? 'Cancel' : 'Add New'}
                                     </button>
-                                </div>
+                                }
+                            >
 
                                 {showCredentialForm && !editingCredentialId && (
                                     <CredentialBox 
@@ -2835,24 +3272,44 @@ const Clients: React.FC = () => {
                                 )}
 
                                 <div className="space-y-3">
-                                    {(context?.credentials || [])
-                                        .filter(c => normalizeId(c.clientID) === normalizeId(selectedClient.id))
-                                        .map((c) => (
-                                            <CredentialBox
-                                                key={c.credentialID}
-                                                credential={c}
-                                                isEditing={editingCredentialId === c.credentialID}
-                                                onEdit={(cred) => {
-                                                    setEditingCredentialId(cred.credentialID);
-                                                    setCredentialFormData(cred);
-                                                }}
-                                                onDelete={handleDeleteCredential}
-                                                onCancel={() => setEditingCredentialId(null)}
-                                                onSave={handleUpdateCredential}
-                                                isSubmitting={isSubmitting}
-                                            />
-                                        ))
-                                    }
+                                    {(context?.credentials || []).filter(c => normalizeId(c.clientID) === normalizeId(selectedClient.id)).length > 0 && (
+                                        <div className="bg-white/85 dark:bg-gray-800/70 rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
+                                            <div className="hidden sm:grid grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_auto] gap-4 px-4 py-2.5 bg-neutral-light/50 dark:bg-gray-900/40 border-b border-neutral-medium/50 dark:border-gray-700">
+                                                <span className="text-[9px] font-black text-secondary dark:text-gray-400">System</span>
+                                                <span className="text-[9px] font-black text-secondary dark:text-gray-400">Username</span>
+                                                <span className="text-[9px] font-black text-secondary dark:text-gray-400">Password</span>
+                                                <span className="text-[9px] font-black text-secondary dark:text-gray-400 text-right">Actions</span>
+                                            </div>
+                                            <div className="divide-y divide-neutral-medium/40 dark:divide-gray-700">
+                                                {(context?.credentials || [])
+                                                    .filter(c => normalizeId(c.clientID) === normalizeId(selectedClient.id))
+                                                    .map((c) => (
+                                                        editingCredentialId === c.credentialID ? (
+                                                            <div key={c.credentialID} className="p-4">
+                                                                <CredentialBox
+                                                                    credential={c}
+                                                                    isEditing
+                                                                    onCancel={() => setEditingCredentialId(null)}
+                                                                    onSave={handleUpdateCredential}
+                                                                    isSubmitting={isSubmitting}
+                                                                />
+                                                            </div>
+                                                        ) : (
+                                                            <CredentialRow
+                                                                key={c.credentialID}
+                                                                credential={c}
+                                                                onEdit={(cred) => {
+                                                                    setEditingCredentialId(cred.credentialID);
+                                                                    setCredentialFormData(cred);
+                                                                }}
+                                                                onDelete={handleDeleteCredential}
+                                                            />
+                                                        )
+                                                    ))
+                                                }
+                                            </div>
+                                        </div>
+                                    )}
                                     {(context?.credentials || []).filter(c => normalizeId(c.clientID) === normalizeId(selectedClient.id)).length === 0 && !showCredentialForm && (
                                         <div className="py-8 text-center border border-dashed border-neutral-medium dark:border-gray-700 rounded-[2rem] bg-white/40 dark:bg-gray-900/40">
                                             <Shield className="mx-auto mb-2 text-neutral-medium dark:text-gray-700 opacity-20" size={20} />
@@ -2860,7 +3317,7 @@ const Clients: React.FC = () => {
                                         </div>
                                     )}
                                 </div>
-                            </div>
+                            </ClientDrawerSection>
                         </div>
 
                     </div>

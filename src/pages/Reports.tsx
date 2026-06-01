@@ -1,7 +1,7 @@
 import React, { useContext, useMemo, useState } from 'react';
 import { AppContext } from '../App';
 import { UserRole } from '../types';
-import { 
+import {
     BarChart, 
     Bar, 
     XAxis, 
@@ -28,7 +28,6 @@ import {
     Calendar, 
     ArrowUpRight, 
     Filter, 
-    Download,
     Building2,
     Clock,
     CheckCircle,
@@ -36,6 +35,9 @@ import {
     Award,
     AlertCircle
 } from 'lucide-react';
+
+const getUserFullName = (user: any) => `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
+const sortUsersByName = (users: any[]) => [...users].sort((a, b) => getUserFullName(a).localeCompare(getUserFullName(b)));
 
 const normalizeId = (id: any) => String(id || '').replace(/^0+(?!$)/, '').trim() || '0';
 
@@ -99,7 +101,7 @@ const Reports: React.FC = () => {
 
     // Filter staff based on context role to restrict dropdown values
     const allowedStaffList = useMemo(() => {
-        const activeStaff = allUsers.filter((u: any) => u.status === 'Active');
+        const activeStaff = sortUsersByName(allUsers.filter((u: any) => u.status === 'Active'));
         if (currentUser?.role === UserRole.ADMIN || currentUser?.role === UserRole.MANAGER || currentUser?.role === UserRole.SUPERVISOR) {
             return activeStaff;
         }
@@ -112,9 +114,22 @@ const Reports: React.FC = () => {
 
     // Available teams
     const teams = useMemo(() => {
-        const allTeams = allUsers.map((u: any) => u.team).filter(Boolean);
-        return ['All', ...Array.from(new Set(allTeams))];
+        const allTeams = allUsers.filter((u: any) => u.status === 'Active').map((u: any) => u.team).filter(Boolean);
+        return ['All', ...Array.from(new Set(allTeams)).sort()];
     }, [allUsers]);
+
+    const reportScopeLabel = useMemo(() => {
+        if (selectedStaffMember !== 'All') return selectedStaffMember;
+        if (selectedTeam !== 'All') return `${selectedTeam} Team`;
+        return 'Firm-wide';
+    }, [selectedStaffMember, selectedTeam]);
+
+    const reportingWindowLabel = {
+        all: 'All Time',
+        year: 'Year to Date',
+        '6months': 'Last 6 Months',
+        month: 'Current Month'
+    }[timePeriod];
 
     // Check date within selected filter range
     const isDateInFilterRange = (date: Date | null): boolean => {
@@ -134,15 +149,52 @@ const Reports: React.FC = () => {
         return true;
     };
 
+    const reportLookups = useMemo(() => {
+        const retainerById = new Map<string, any>();
+        retainers.forEach(r => retainerById.set(normalizeId(r.id), r));
+
+        const clientById = new Map<string, any>();
+        clients.forEach(c => clientById.set(normalizeId(c.id), c));
+
+        const userByName = new Map<string, any>();
+        allUsers.forEach(u => {
+            userByName.set(u.firstName, u);
+            userByName.set(`${u.firstName} ${u.lastName}`, u);
+            userByName.set(String(u.id), u);
+        });
+
+        const logsByDeadline = new Map<string, any[]>();
+        retainerLogs.forEach(l => {
+            const key = normalizeId(l[0]);
+            if (!logsByDeadline.has(key)) logsByDeadline.set(key, []);
+            logsByDeadline.get(key)!.push(l);
+        });
+
+        const taxById = new Map<string, any>();
+        taxCompliances.forEach(tc => taxById.set(normalizeId(tc.taxID), tc));
+
+        const tasksBySpecial = new Map<string, any[]>();
+        (context?.taskLog || []).forEach(t => {
+            const key = normalizeId(t.specialID);
+            if (!tasksBySpecial.has(key)) tasksBySpecial.set(key, []);
+            tasksBySpecial.get(key)!.push(t);
+        });
+
+        return { retainerById, clientById, userByName, logsByDeadline, taxById, tasksBySpecial };
+    }, [retainers, clients, allUsers, retainerLogs, taxCompliances, context?.taskLog]);
+
     // -------------------------------------------------------------
     // CALCULATIONS: Tab 1 - Compliance Trends & Accuracy
     // -------------------------------------------------------------
     const complianceReportsData = useMemo(() => {
+        if (activeTab !== 'compliance') {
+            return { taxPerformance: [], timeline: [], summary: { totalFiling: 0, onTime: 0, late: 0 } };
+        }
         const monthsList = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
         
         // 1. Process Deadlines vs Logs
         const deadlineMap = deadlines.map((d: any) => {
-            const retainer = retainers.find(r => normalizeId(r.id) === normalizeId(d.retainerID));
+            const retainer = reportLookups.retainerById.get(normalizeId(d.retainerID));
             if (!retainer) return null;
 
             // Staff & Team Filters
@@ -151,15 +203,15 @@ const Reports: React.FC = () => {
                                    retainer.assignedStaff?.includes(selectedStaffMember);
                 if (!isAssigned) return null;
             } else if (selectedTeam !== 'All') {
-                const assignedUser = allUsers.find(u => u.firstName === retainer.assignedStaff || `${u.firstName} ${u.lastName}` === retainer.assignedStaff);
+                const assignedUser = reportLookups.userByName.get(retainer.assignedStaff);
                 if (assignedUser?.team !== selectedTeam) return null;
             }
 
-            const client = clients.find(c => normalizeId(c.id) === normalizeId(retainer.clientId));
+            const client = reportLookups.clientById.get(normalizeId(retainer.clientId));
             if (!client || client.status === 'Inactive') return null;
 
             // Generate status & filing dates across active logs
-            const matchedLogs = retainerLogs.filter(l => normalizeId(l[0]) === normalizeId(d.deadlineID));
+            const matchedLogs = reportLookups.logsByDeadline.get(normalizeId(d.deadlineID)) || [];
             
             return {
                 id: d.deadlineID,
@@ -175,7 +227,7 @@ const Reports: React.FC = () => {
         const taxPerformanceMap: Record<string, { code: string; name: string; filed: number; late: number; total: number }> = {};
         
         deadlineMap.forEach((d: any) => {
-            const tax = taxCompliances.find(tc => tc.taxID === d.taxID);
+            const tax = reportLookups.taxById.get(normalizeId(d.taxID));
             const codeKey = tax?.complianceCode || d.taxID || 'Other';
             if (!taxPerformanceMap[codeKey]) {
                 taxPerformanceMap[codeKey] = {
@@ -250,13 +302,19 @@ const Reports: React.FC = () => {
                 late: deadlineMap.reduce((acc, curr) => acc + curr.logs.filter(l => String(l[2] && l[3]).toLowerCase().includes('late')).length, 0)
             }
         };
-    }, [deadlines, retainers, retainerLogs, clients, taxCompliances, timePeriod, selectedTeam, selectedStaffMember, allUsers]);
+    }, [activeTab, deadlines, reportLookups, timePeriod, selectedTeam, selectedStaffMember]);
 
     // -------------------------------------------------------------
     // CALCULATIONS: Tab 2 - Client Portfolio & Saturation
     // -------------------------------------------------------------
     const portfolioReportsData = useMemo(() => {
+        if (activeTab !== 'portfolio') {
+            return { saturation: [], entityDistribution: [], credentialsRate: 0, activeClientCount: 0 };
+        }
         const activeClients = clients.filter(c => c.status === 'Active');
+        const retainerClientIds = new Set(retainers.filter(r => r.engagementStatus === 'Active').map(r => normalizeId(r.clientId)));
+        const specialClientIds = new Set(specials.filter(s => s.status !== 'Completed').map(s => normalizeId(s.clientId)));
+        const credentialClientIds = new Set((context?.credentials || []).map(cr => normalizeId(cr.clientID)));
         
         let retainerClients = 0;
         let specialClients = 0;
@@ -266,11 +324,9 @@ const Reports: React.FC = () => {
         const entityTypeCount: Record<string, number> = {};
 
         activeClients.forEach(c => {
-            const clientRetainers = retainers.filter(r => normalizeId(r.clientId) === normalizeId(c.id) && r.engagementStatus === 'Active');
-            const clientSpecials = specials.filter(s => normalizeId(s.clientId) === normalizeId(c.id) && s.status !== 'Completed');
-
-            const hasRetainer = clientRetainers.length > 0;
-            const hasSpecial = clientSpecials.length > 0;
+            const clientId = normalizeId(c.id);
+            const hasRetainer = retainerClientIds.has(clientId);
+            const hasSpecial = specialClientIds.has(clientId);
 
             if (hasRetainer && hasSpecial) bothClients++;
             else if (hasRetainer) retainerClients++;
@@ -283,10 +339,7 @@ const Reports: React.FC = () => {
         });
 
         // Credentials Completeness Gauge
-        const clientsWithCreds = activeClients.filter(c => {
-            const hasCred = (context?.credentials || []).some(cr => normalizeId(cr.clientID) === normalizeId(c.id));
-            return hasCred;
-        }).length;
+        const clientsWithCreds = activeClients.filter(c => credentialClientIds.has(normalizeId(c.id))).length;
 
         const saturationData = [
             { name: 'Retainers Only', value: retainerClients, fill: PIE_COLORS.retainer },
@@ -303,12 +356,15 @@ const Reports: React.FC = () => {
             credentialsRate: activeClients.length > 0 ? Math.round((clientsWithCreds / activeClients.length) * 100) : 0,
             activeClientCount: activeClients.length
         };
-    }, [clients, retainers, specials, context?.credentials]);
+    }, [activeTab, clients, retainers, specials, context?.credentials]);
 
     // -------------------------------------------------------------
     // CALCULATIONS: Tab 3 - Special Engagements (One-Time Projects) Direct Report
     // -------------------------------------------------------------
     const specialEngagementsReportsData = useMemo(() => {
+        if (activeTab !== 'specials') {
+            return { total: 0, inProgress: 0, completed: 0, blocked: 0, planning: 0, statusChartData: [], serviceTypesData: [], projectProgressList: [], avgTurnaround: null };
+        }
         // Filter specials based on date / team / staff selector
         const filteredSpecials = specials.filter((s: any) => {
             // Staff Filter
@@ -317,7 +373,7 @@ const Reports: React.FC = () => {
                                    s.assignedStaff?.includes(selectedStaffMember);
                 if (!isAssigned) return false;
             } else if (selectedTeam !== 'All') {
-                const assignedUser = allUsers.find(u => u.firstName === s.assignedStaff || `${u.firstName} ${u.lastName}` === s.assignedStaff);
+                const assignedUser = reportLookups.userByName.get(s.assignedStaff);
                 if (assignedUser?.team !== selectedTeam) return false;
             }
 
@@ -355,14 +411,13 @@ const Reports: React.FC = () => {
         })).sort((a, b) => b.value - a.value);
 
         // 4. Progress Tracker
-        const taskLog = context?.taskLog || [];
         const projectProgressList = filteredSpecials.map((s: any) => {
-            const relatedTasks = taskLog.filter(t => normalizeId(t.specialID) === normalizeId(s.id));
+            const relatedTasks = reportLookups.tasksBySpecial.get(normalizeId(s.id)) || [];
             const totalTasks = relatedTasks.length;
             const completedTasks = relatedTasks.filter(t => t.status === 'Completed').length;
             
             const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-            const client = clients.find(c => normalizeId(c.id) === normalizeId(s.clientId));
+            const client = reportLookups.clientById.get(normalizeId(s.clientId));
 
             return {
                 id: s.id,
@@ -406,23 +461,38 @@ const Reports: React.FC = () => {
             projectProgressList,
             avgTurnaround
         };
-    }, [specials, selectedStaffMember, selectedTeam, allUsers, timePeriod, context?.taskLog, clients]);
+    }, [activeTab, specials, selectedStaffMember, selectedTeam, timePeriod, reportLookups]);
 
     // -------------------------------------------------------------
     // CALCULATIONS: Tab 4 - Staff & Team Load Performance
     // -------------------------------------------------------------
     const staffReportsData = useMemo(() => {
+        if (activeTab !== 'staff') {
+            return { loadChart: [], scoreboard: [], averages: { seniorAvgLoad: '0', juniorAvgLoad: '0' } };
+        }
         // Filter users who are active and not system administrators (core workers)
-        const activeUsersList = allUsers.filter((u: any) => u.status === 'Active' && u.role !== UserRole.ADMIN);
+        const activeUsersList = sortUsersByName(allUsers.filter((u: any) => u.status === 'Active' && u.role !== UserRole.ADMIN));
+        const retainersByStaff = new Map<string, any[]>();
+        retainers.forEach(r => {
+            [r.assignedStaff].forEach(key => {
+                if (!retainersByStaff.has(key)) retainersByStaff.set(key, []);
+                retainersByStaff.get(key)!.push(r);
+            });
+        });
+        const specialsByStaff = new Map<string, any[]>();
+        specials.forEach(s => {
+            if (!specialsByStaff.has(s.assignedStaff)) specialsByStaff.set(s.assignedStaff, []);
+            specialsByStaff.get(s.assignedStaff)!.push(s);
+        });
 
         const staffLoad = activeUsersList.map((u: any) => {
             const name = `${u.firstName} ${u.lastName}`;
             const shortName = u.firstName;
 
             // Retainers workload
-            const activeRetainers = retainers.filter(r => r.assignedStaff === name || r.assignedStaff === shortName);
+            const activeRetainers = [...(retainersByStaff.get(name) || []), ...(retainersByStaff.get(shortName) || [])];
             // Special active projects
-            const activeSpecials = specials.filter(s => (s.assignedStaff === name || s.assignedStaff === shortName) && s.status === 'In Progress');
+            const activeSpecials = [...(specialsByStaff.get(name) || []), ...(specialsByStaff.get(shortName) || [])].filter(s => s.status === 'In Progress');
             
             // Total volume assigned
             const totalLoad = activeRetainers.length + activeSpecials.length;
@@ -432,9 +502,9 @@ const Reports: React.FC = () => {
             let userOnTimeCount = 0;
 
             deadlines.forEach((d: any) => {
-                const parentRet = retainers.find(r => normalizeId(r.id) === normalizeId(d.retainerID));
+                const parentRet = reportLookups.retainerById.get(normalizeId(d.retainerID));
                 if (parentRet && (parentRet.assignedStaff === name || parentRet.assignedStaff === shortName)) {
-                    const logs = retainerLogs.filter(l => normalizeId(l[0]) === normalizeId(d.deadlineID));
+                    const logs = reportLookups.logsByDeadline.get(normalizeId(d.deadlineID)) || [];
                     logs.forEach(log => {
                         const dateComp = parseDateSafe(log[2]);
                         if (!isDateInFilterRange(dateComp)) return;
@@ -483,12 +553,15 @@ const Reports: React.FC = () => {
                 juniorAvgLoad
             }
         };
-    }, [allUsers, retainers, specials, deadlines, retainerLogs, selectedTeam, selectedStaffMember, timePeriod]);
+    }, [activeTab, allUsers, retainers, specials, deadlines, reportLookups, selectedTeam, selectedStaffMember, timePeriod]);
 
     // -------------------------------------------------------------
     // CALCULATIONS: Tab 5 - Operational Logistics
     // -------------------------------------------------------------
     const logisticsReportsData = useMemo(() => {
+        if (activeTab !== 'logistics') {
+            return { transmittalsTimeline: [], topDocuments: [], summary: { totalTransmittals: 0, totalMeetings: 0, avgAttendees: '0' } };
+        }
         const monthsList = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
         
         // 1. Transmittals Volume timeline
@@ -497,9 +570,11 @@ const Reports: React.FC = () => {
         // 2. Parse Shipped document types
         const documentTypeFrequencies: Record<string, number> = {};
 
+        let filteredTransmittalCount = 0;
         transmittals.forEach((t: any) => {
             const tDate = parseDateSafe(t.date);
             if (!tDate || !isDateInFilterRange(tDate)) return;
+            filteredTransmittalCount++;
 
             const mName = monthsList[tDate.getMonth()];
             const yName = tDate.getFullYear();
@@ -515,7 +590,7 @@ const Reports: React.FC = () => {
             transmittalsTimeline[key].count += 1;
 
             // Document Parsing (by Semicolon or double pipes)
-            const docItems = String(t.items || '').split(/[;||]/);
+            const docItems = String(t.items || '').split(/\|\||;/);
             docItems.forEach(item => {
                 const cleanItem = item.trim().replace(/\d/g, '').replace(/^-+/, '').trim(); // Remove leading numbers
                 if (cleanItem && cleanItem.length > 2) {
@@ -562,48 +637,36 @@ const Reports: React.FC = () => {
             transmittalsTimeline: timelineArray,
             topDocuments: topDocsArray,
             summary: {
-                totalTransmittals: transmittals.length,
-                totalMeetings: meetings.length,
+                totalTransmittals: filteredTransmittalCount,
+                totalMeetings: meetingTimeline.length,
                 avgAttendees: avgAttendees
             }
         };
-    }, [transmittals, meetings, timePeriod]);
-
-    // Print Report triggering local browser window printing
-    const triggerPrint = () => {
-        window.print();
-    };
+    }, [activeTab, transmittals, meetings, timePeriod]);
 
     return (
         <div className="w-full mx-auto p-2 space-y-6 animate-in fade-in duration-700 print:p-0 print:space-y-4">
             
             {/* 1. Header with Title & Custom Print CTA */}
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 px-1 print:hidden">
-                <div className="space-y-0.5">
+            <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 px-1 print:hidden">
+                <div className="space-y-1">
                     <div className="flex items-center gap-2.5">
                         <div className="w-1.5 h-7 bg-primary rounded-full" />
-                        <h1 className="text-3xl font-black text-neutral-dark dark:text-white tracking-tight">C-Suite Analytics Hub</h1>
+                        <h1 className="text-3xl font-black text-neutral-dark dark:text-white tracking-tight">Reports & Analytics</h1>
                     </div>
                     <p className="text-sm text-secondary dark:text-gray-300 font-medium pl-4 opacity-70">
-                        Operational efficiency, client distribution and performance benchmarking.
+                        Compliance health, client portfolio, workload, and office operations in one view.
                     </p>
                 </div>
-                <button 
-                    onClick={triggerPrint}
-                    className="flex items-center gap-2 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 px-5 py-2.5 rounded-2xl shadow-md hover:shadow-lg hover:border-primary hover:text-primary transition-all text-xs font-black uppercase tracking-wider text-secondary dark:text-white shrink-0"
-                >
-                    <Download size={14} className="text-primary" />
-                    Print Executive Brief
-                </button>
             </div>
 
             {/* 2. Global Strategic Filtering Bar (Admins see all, Seniors see team, Staff see self) */}
-            <div className="bg-white dark:bg-gray-800 p-5 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl shadow-neutral-dark/5 flex flex-wrap items-center justify-between gap-4 print:hidden">
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex flex-wrap items-center justify-between gap-4 print:hidden">
                 <div className="flex flex-wrap items-center gap-3.5">
                     
                     {/* Time Period Filter */}
                     <div className="flex flex-col gap-1">
-                        <label className="text-[8px] font-black uppercase tracking-widest text-secondary opacity-60 dark:opacity-100 ml-1">Reporting Window</label>
+                        <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Reporting Window</label>
                         <div className="flex bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 p-1 rounded-xl">
                             {[
                                 { key: 'all', label: 'All Time' },
@@ -614,7 +677,7 @@ const Reports: React.FC = () => {
                                 <button
                                     key={item.key}
                                     onClick={() => setTimePeriod(item.key as any)}
-                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${timePeriod === item.key ? 'bg-primary text-white shadow-sm shadow-primary/20' : 'text-secondary hover:text-neutral-dark dark:text-gray-300 dark:hover:text-white'}`}
+                                    className={`px-3 py-1.5 rounded-lg text-[10px] font-black transition-all ${timePeriod === item.key ? 'bg-primary text-white shadow-sm shadow-primary/20' : 'text-secondary hover:text-neutral-dark dark:text-gray-300 dark:hover:text-white'}`}
                                 >
                                     {item.label}
                                 </button>
@@ -625,14 +688,14 @@ const Reports: React.FC = () => {
                     {/* Team Scope Filter - Manager and above only */}
                     {currentUser?.role !== UserRole.STAFF && (
                         <div className="flex flex-col gap-1">
-                            <label className="text-[8px] font-black uppercase tracking-widest text-secondary opacity-60 dark:opacity-100 ml-1">Team Scope</label>
+                            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Team Scope</label>
                             <select
                                 value={selectedTeam}
                                 onChange={(e) => {
                                     setSelectedTeam(e.target.value);
                                     setSelectedStaffMember('All'); // Reset staff filter on team change
                                 }}
-                                className="px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-[10px] font-black uppercase tracking-wider text-secondary dark:text-white outline-none cursor-pointer focus:ring-2 focus:ring-primary/20"
+                                className="px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-[11px] font-black text-secondary dark:text-white outline-none cursor-pointer focus:ring-2 focus:ring-primary/20"
                             >
                                 <option value="All">All Teams</option>
                                 {teams.filter(t => t !== 'All').map(t => (
@@ -645,11 +708,11 @@ const Reports: React.FC = () => {
                     {/* Staff Member Scope Filter */}
                     {currentUser?.role !== UserRole.STAFF && (
                         <div className="flex flex-col gap-1">
-                            <label className="text-[8px] font-black uppercase tracking-widest text-secondary opacity-60 dark:opacity-100 ml-1">Drill Down Worker</label>
+                            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Staff Scope</label>
                             <select
                                 value={selectedStaffMember}
                                 onChange={(e) => setSelectedStaffMember(e.target.value)}
-                                className="px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-[10px] font-black uppercase tracking-wider text-secondary dark:text-white outline-none cursor-pointer focus:ring-2 focus:ring-primary/20"
+                                className="px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-[11px] font-black text-secondary dark:text-white outline-none cursor-pointer focus:ring-2 focus:ring-primary/20"
                             >
                                 <option value="All">All Staff / Seniors</option>
                                 {allowedStaffList.map(u => (
@@ -660,27 +723,27 @@ const Reports: React.FC = () => {
                     )}
                 </div>
 
-                <div className="flex items-center gap-2 bg-primary/5 px-4 py-2.5 rounded-2xl border border-primary/10">
+                <div className="flex items-center gap-2 bg-primary/5 px-3 py-2 rounded-xl border border-primary/10">
                     <Filter size={12} className="text-primary" />
-                    <span className="text-[9px] font-black text-primary uppercase tracking-widest">
-                        {selectedStaffMember !== 'All' ? 'Filtered: Individual Audit' : selectedTeam !== 'All' ? `Filtered: ${selectedTeam} Team` : 'Auditing Firm-Wide Scope'}
+                    <span className="text-[10px] font-black text-primary">
+                        {reportScopeLabel} · {reportingWindowLabel}
                     </span>
                 </div>
             </div>
 
             {/* 3. High-Fidelity Custom Analytical Tabs */}
-            <div className="flex flex-wrap items-center border-b border-neutral-medium dark:border-gray-700 gap-6 print:hidden">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm p-2 flex flex-wrap items-center gap-2 print:hidden">
                 {[
-                    { key: 'compliance', label: 'Compliance & Filing Health', icon: Shield },
-                    { key: 'portfolio', label: 'Client Demographics', icon: Building2 },
-                    { key: 'specials', label: 'Special (One-Time) Projects', icon: Briefcase },
-                    { key: 'staff', label: 'Staff & Team Workloads', icon: Users },
-                    { key: 'logistics', label: 'Operational Logistics', icon: FileSpreadsheet }
+                    { key: 'compliance', label: 'Compliance', icon: Shield },
+                    { key: 'portfolio', label: 'Clients', icon: Building2 },
+                    { key: 'specials', label: 'Special Projects', icon: Briefcase },
+                    { key: 'staff', label: 'Staff Load', icon: Users },
+                    { key: 'logistics', label: 'Operations', icon: FileSpreadsheet }
                 ].map(tab => (
                     <button
                         key={tab.key}
                         onClick={() => setActiveTab(tab.key as any)}
-                        className={`flex items-center gap-2 pb-3 text-xs font-black uppercase tracking-widest transition-all border-b-2 ${activeTab === tab.key ? 'border-primary text-primary font-black' : 'border-transparent text-secondary hover:text-neutral-dark dark:hover:text-white'}`}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-black transition-all ${activeTab === tab.key ? 'bg-primary text-white shadow-sm shadow-primary/20' : 'text-secondary hover:text-neutral-dark hover:bg-neutral-light/70 dark:hover:bg-gray-900 dark:hover:text-white'}`}
                     >
                         <tab.icon size={14} />
                         {tab.label}
@@ -695,7 +758,7 @@ const Reports: React.FC = () => {
                 <div className="space-y-6">
                     {/* Metrics Summary Row */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-5">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center text-blue-500 shrink-0">
                                 <FileText size={22} />
                             </div>
@@ -705,7 +768,7 @@ const Reports: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-5">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center text-emerald-500 shrink-0">
                                 <CheckCircle size={22} />
                             </div>
@@ -715,7 +778,7 @@ const Reports: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-5">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-12 h-12 bg-rose-500/10 rounded-2xl flex items-center justify-center text-rose-500 shrink-0">
                                 <Clock size={22} />
                             </div>
@@ -728,7 +791,7 @@ const Reports: React.FC = () => {
 
                     {/* Compliance Charts */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl">
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm">
                             <div className="mb-6">
                                 <h3 className="text-base font-black text-neutral-dark dark:text-white">Tax Compliance Performance</h3>
                                 <p className="text-xs text-secondary dark:text-gray-400 font-medium">On-Time vs Late Filings grouped by Tax Code</p>
@@ -752,7 +815,7 @@ const Reports: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl">
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm">
                             <div className="mb-6">
                                 <h3 className="text-base font-black text-neutral-dark dark:text-white">Historical Timeliness Rate</h3>
                                 <p className="text-xs text-secondary dark:text-gray-400 font-medium">Monthly compliance accuracy percentage trends</p>
@@ -785,7 +848,7 @@ const Reports: React.FC = () => {
                 <div className="space-y-6">
                     {/* Portfolio Cards */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-5">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary shrink-0">
                                 <Building2 size={22} />
                             </div>
@@ -795,7 +858,7 @@ const Reports: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-5">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-12 h-12 bg-amber-500/10 rounded-2xl flex items-center justify-center text-amber-500 shrink-0">
                                 <Shield size={22} />
                             </div>
@@ -808,7 +871,7 @@ const Reports: React.FC = () => {
 
                     {/* Portfolio Charts */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl flex flex-col justify-between">
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex flex-col justify-between">
                             <div className="mb-4">
                                 <h3 className="text-base font-black text-neutral-dark dark:text-white">Services Saturation</h3>
                                 <p className="text-xs text-secondary dark:text-gray-400 font-medium">Division of clients by enrolled active service segments</p>
@@ -848,7 +911,7 @@ const Reports: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl">
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm">
                             <div className="mb-6">
                                 <h3 className="text-base font-black text-neutral-dark dark:text-white">Portfolio by Client Entity Type</h3>
                                 <p className="text-xs text-secondary dark:text-gray-400 font-medium">Saturation of Corporation, Partnership vs Individual clients</p>
@@ -881,7 +944,7 @@ const Reports: React.FC = () => {
                     
                     {/* Summary Row */}
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-4">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-10 h-10 bg-blue-500/10 rounded-2xl flex items-center justify-center text-blue-500 shrink-0">
                                 <Briefcase size={20} />
                             </div>
@@ -891,7 +954,7 @@ const Reports: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-4">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-10 h-10 bg-amber-500/10 rounded-2xl flex items-center justify-center text-amber-500 shrink-0">
                                 <TrendingUp size={20} />
                             </div>
@@ -901,7 +964,7 @@ const Reports: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-4">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-10 h-10 bg-rose-500/10 rounded-2xl flex items-center justify-center text-rose-500 shrink-0">
                                 <AlertCircle size={20} />
                             </div>
@@ -911,7 +974,7 @@ const Reports: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-4">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-10 h-10 bg-emerald-500/10 rounded-2xl flex items-center justify-center text-emerald-500 shrink-0">
                                 <Clock size={20} />
                             </div>
@@ -927,7 +990,7 @@ const Reports: React.FC = () => {
                     {/* Interactive Charts row */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         {/* Project Status Pie Chart */}
-                        <div className="bg-white dark:bg-gray-800 p-7 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl flex flex-col justify-between">
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex flex-col justify-between">
                             <div>
                                 <h3 className="text-base font-black text-neutral-dark dark:text-white">Project Lifecycle Status</h3>
                                 <p className="text-xs text-secondary dark:text-gray-400 font-medium">Progress division of active and finished engagements</p>
@@ -967,7 +1030,7 @@ const Reports: React.FC = () => {
                         </div>
 
                         {/* Service Type Saturation */}
-                        <div className="bg-white dark:bg-gray-800 p-7 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl">
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm">
                             <div>
                                 <h3 className="text-base font-black text-neutral-dark dark:text-white">Engagements by Consulting Service Type</h3>
                                 <p className="text-xs text-secondary dark:text-gray-400 font-medium">saturation of one-time professional services</p>
@@ -991,7 +1054,7 @@ const Reports: React.FC = () => {
                     </div>
 
                     {/* Progress Tracker list */}
-                    <div className="bg-white dark:bg-gray-800 p-7 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl">
+                    <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm">
                         <div className="mb-5">
                             <h3 className="text-base font-black text-neutral-dark dark:text-white">Active Special Projects Progress Tracker</h3>
                             <p className="text-xs text-secondary dark:text-gray-400 font-medium">Task completed ratio calculated live from task audit logs</p>
@@ -1059,7 +1122,7 @@ const Reports: React.FC = () => {
                 <div className="space-y-6">
                     {/* Capacity indicators */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-5">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-12 h-12 bg-rose-500/10 rounded-2xl flex items-center justify-center text-rose-500 shrink-0">
                                 <Award size={22} />
                             </div>
@@ -1069,7 +1132,7 @@ const Reports: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-5">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center text-emerald-500 shrink-0">
                                 <Users size={22} />
                             </div>
@@ -1082,7 +1145,7 @@ const Reports: React.FC = () => {
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         {/* Workload Capacity Bar Chart */}
-                        <div className="lg:col-span-2 bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl">
+                        <div className="lg:col-span-2 bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm">
                             <div className="mb-6 flex justify-between items-center">
                                 <div>
                                     <h3 className="text-base font-black text-neutral-dark dark:text-white">Active Workload Distribution</h3>
@@ -1111,7 +1174,7 @@ const Reports: React.FC = () => {
                         </div>
 
                         {/* On-Time Performance Scoreboard list */}
-                        <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl flex flex-col justify-between">
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex flex-col justify-between">
                             <div>
                                 <div className="mb-4">
                                     <h3 className="text-base font-black text-neutral-dark dark:text-white">Timeliness Scoreboard</h3>
@@ -1159,7 +1222,7 @@ const Reports: React.FC = () => {
                 <div className="space-y-6">
                     {/* Logistics Summary cards */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-5">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center text-primary shrink-0">
                                 <FileSpreadsheet size={22} />
                             </div>
@@ -1169,17 +1232,17 @@ const Reports: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-5">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center text-blue-500 shrink-0">
                                 <Users size={22} />
                             </div>
                             <div>
-                                <h4 className="text-[9px] font-black uppercase tracking-widest text-secondary opacity-60 dark:opacity-100">Secure Meetings Logged</h4>
+                                <h4 className="text-[9px] font-black uppercase tracking-widest text-secondary opacity-60 dark:opacity-100">Meetings Logged</h4>
                                 <p className="text-3xl font-black text-neutral-dark dark:text-white mt-0.5">{logisticsReportsData.summary.totalMeetings}</p>
                             </div>
                         </div>
 
-                        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl flex items-center gap-5">
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm flex items-center gap-4">
                             <div className="w-12 h-12 bg-amber-500/10 rounded-2xl flex items-center justify-center text-amber-500 shrink-0">
                                 <Clock size={22} />
                             </div>
@@ -1194,7 +1257,7 @@ const Reports: React.FC = () => {
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         
                         {/* Transmittal Release Volume timeline */}
-                        <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl">
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm">
                             <div className="mb-6">
                                 <h3 className="text-base font-black text-neutral-dark dark:text-white">Document Release Pipeline</h3>
                                 <p className="text-xs text-secondary dark:text-gray-400 font-medium">Monthly volume of printed physical/digital transmittal slips</p>
@@ -1224,7 +1287,7 @@ const Reports: React.FC = () => {
                         </div>
 
                         {/* Top Document Types Table/Bar Chart */}
-                        <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl">
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm">
                             <div className="mb-6">
                                 <h3 className="text-base font-black text-neutral-dark dark:text-white">Top Released Document Types</h3>
                                 <p className="text-xs text-secondary dark:text-gray-400 font-medium">Parsing keyword frequency of items packed in transmittals</p>
@@ -1262,10 +1325,10 @@ const Reports: React.FC = () => {
                 </div>
             )}
             
-            {/* 4. Elegant Executive Footer for Printable Executive brief */}
+            {/* 4. Printable report footer */}
             <div className="hidden print:flex flex-col items-center justify-center pt-8 border-t border-dashed border-neutral-medium/50 mt-12 text-center">
-                <p className="text-[9px] font-black uppercase tracking-[0.25em] text-neutral-dark">MPCA Associates Corporate Analytics Brief</p>
-                <p className="text-[8px] font-bold text-secondary mt-1">Generated on {new Date().toDateString()} · Confidential Management Reference</p>
+                <p className="text-[9px] font-black uppercase tracking-[0.25em] text-neutral-dark">MPCA Associates Reports & Analytics</p>
+                <p className="text-[8px] font-bold text-secondary mt-1">Generated on {new Date().toDateString()}</p>
             </div>
             
         </div>

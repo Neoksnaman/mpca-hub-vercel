@@ -1,9 +1,10 @@
 
-import React, { useContext, useState, useRef, useEffect } from 'react';
+import React, { useContext, useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Menu, Bell, User, Sun, Moon, Briefcase, Calendar, Check, AlertCircle } from 'lucide-react';
 import { AppContext } from '../App';
-import { markNotificationRead, markAllNotificationsRead } from '../services/googleSheetsService';
+import { fetchNotifications, markNotificationRead, markAllNotificationsRead } from '../services/googleSheetsService';
 import { months, computeActualDueDate, parseDateStr } from '../utils/dateUtils';
+import { Client, Notification, RetainerEngagement } from '../types';
 
 const AUTO_NOTIF_IDS = ['approaching-deadlines', 'overdue-deadlines', 'transmittal-upload-warning'];
 
@@ -16,13 +17,11 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
   const context = useContext(AppContext);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [imgError, setImgError] = useState(false);
+  const [persistedNotifications, setPersistedNotifications] = useState<Notification[]>([]);
+  const [notificationsLoaded, setNotificationsLoaded] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setImgError(false);
-  }, [context?.user?.avatarUrl]);
+  const contextUserId = context?.user?.id;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -37,141 +36,156 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  if (!context) return null;
-  const { theme, toggleTheme, user, notifications, refreshData } = context;
+  const loadPersistedNotifications = useCallback(async () => {
+      if (!contextUserId) {
+          setPersistedNotifications([]);
+          setNotificationsLoaded(false);
+          return;
+      }
 
-  let userNotifications = (notifications || []).filter(n => String(n.userId) === String(user?.id));
+      try {
+          const latest = await fetchNotifications(contextUserId);
+          setPersistedNotifications(latest);
+          setNotificationsLoaded(true);
+      } catch (err) {
+          setNotificationsLoaded(false);
+      }
+  }, [contextUserId]);
+
+  useEffect(() => {
+      loadPersistedNotifications();
+  }, [loadPersistedNotifications]);
+
+  if (!context) return null;
+  const { theme, toggleTheme, user, notifications } = context;
+
+  const notificationSource = notificationsLoaded ? persistedNotifications : (notifications || []);
+  const persistedUserNotifications = useMemo(
+      () => notificationSource.filter(n => String(n.userId) === String(user?.id)),
+      [notificationSource, user?.id]
+  );
 
   // --- DYNAMIC DEADLINE NOTIFICATIONS ---
-  const now = new Date();
-  now.setHours(12, 0, 0, 0);
   const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
   const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
   const userFullName = `${user?.firstName} ${user?.lastName}`.trim();
   const normalizeId = (id: any) => String(id || '').trim().replace(/^0+/, '') || '0';
 
-  let approachingSpecials = 0;
-  let overdueSpecials = 0;
-  let approachingRetainers = 0;
-  let overdueRetainers = 0;
-
   // --- Role Visibility Helper ---
   const isManagerOrAbove = user?.role === 'Manager' || user?.role === 'Supervisor' || user?.role === 'Admin';
-  
-  const isItemVisible = (assignedStaff: string) => {
+
+  const userLookup = useMemo(() => {
+      const lookup = new Map<string, any>();
+      (context.users || []).forEach((u: any) => {
+          lookup.set(String(u.id), u);
+          lookup.set(String(u.firstName), u);
+          lookup.set(`${u.firstName} ${u.lastName}`, u);
+      });
+      return lookup;
+  }, [context.users]);
+
+  const isItemVisible = useCallback((assignedStaff: string) => {
       if (isManagerOrAbove) return true;
       const staffName = String(assignedStaff || '').trim();
       const isOwn = staffName === user?.firstName || staffName === `${user?.firstName} ${user?.lastName}` || staffName === userFullName || staffName === user?.id;
       if (isOwn) return true;
       
       if (user?.role === 'Senior') {
-          const staff = (context.users || []).find((u: any) => u.firstName === staffName || `${u.firstName} ${u.lastName}` === staffName || String(u.id) === staffName);
+          const staff = userLookup.get(staffName);
           return !!(staff && staff.team === user.team);
       }
       return false;
-  };
+  }, [isManagerOrAbove, user?.firstName, user?.lastName, user?.id, user?.role, user?.team, userFullName, userLookup]);
 
-  // 1. Check Specials
-  const mySpecials = (context.specials || []).filter(s => isItemVisible(s.assignedStaff));
-  mySpecials.forEach(s => {
-      if (s.status === 'Completed' || !s.endDate) return;
-      const endDate = parseDateStr(s.endDate);
-      if (!endDate || isNaN(endDate.getTime())) return;
-      endDate.setHours(12, 0, 0, 0);
-      const diff = endDate.getTime() - now.getTime();
-      if (diff >= 0 && diff <= fiveDaysMs) {
-          approachingSpecials++;
-      } else if (diff < 0) {
-          overdueSpecials++;
-      }
-  });
+  const dynamicCounts = useMemo(() => {
+      const now = new Date();
+      now.setHours(12, 0, 0, 0);
 
-  // 2. Check Retainers
-  const myRetainers = (context.retainers || []).filter(r => isItemVisible(r.assignedStaff));
-  const currentMonthIdx = now.getMonth();
-  const currentYear = now.getFullYear();
-  
-  const prevMonthIdx1 = (currentMonthIdx - 1 + 12) % 12;
-  const prevMonthIdx2 = (currentMonthIdx - 2 + 12) % 12;
-  const prevMonth1Year = currentMonthIdx - 1 < 0 ? currentYear - 1 : currentYear;
-  const prevMonth2Year = currentMonthIdx - 2 < 0 ? currentYear - 1 : currentYear;
+      let approachingSpecials = 0;
+      let overdueSpecials = 0;
+      let approachingRetainers = 0;
+      let overdueRetainers = 0;
+      let unuploadedTransmittals = 0;
 
-  const monthsToCheck = [
-      { month: months[prevMonthIdx2], monthIdx: prevMonthIdx2, year: prevMonth2Year },
-      { month: months[prevMonthIdx1], monthIdx: prevMonthIdx1, year: prevMonth1Year },
-      { month: months[currentMonthIdx], monthIdx: currentMonthIdx, year: currentYear },
-      { month: months[(currentMonthIdx + 1) % 12], monthIdx: (currentMonthIdx + 1) % 12, year: currentYear + (currentMonthIdx === 11 ? 1 : 0) }
-  ];
+      const retainerById = new Map<string, RetainerEngagement>((context.retainers || []).filter(r => isItemVisible(r.assignedStaff)).map(r => [normalizeId(r.id), r]));
+      const clientById = new Map<string, Client>((context.clients || []).map(c => [normalizeId(c.id), c]));
+      const filedLogKeys = new Set((context.retainerLogs || []).filter(l => l[2]).map(l => `${normalizeId(l[0])}|${l[1]}`));
 
-  context.deadlines?.forEach(d => {
-      const retainer = myRetainers.find(r => normalizeId(r.id) === normalizeId(d.retainerID));
-      if (!retainer) return;
-      const client = context.clients?.find(c => normalizeId(c.id) === normalizeId(retainer.clientId));
-      if (!client || client.status === 'Inactive') return;
-
-      const frequency = d.dueDate.startsWith('M') ? 'Monthly' :
-          d.dueDate.startsWith('Q') ? 'Quarterly' :
-              (d.dueDate.startsWith('Y') || d.dueDate.startsWith('A')) ? 'Annual' : 'Monthly';
-
-      const calendarOnlyTaxIDs = ['0007', '0008', '0012', '0013', '0016', '0017', '0018', '0019', '0020', '0021', '0022'].map(id => normalizeId(id));
-      const isCalendarOnly = calendarOnlyTaxIDs.includes(normalizeId(d.taxID));
-      const normalizedTaxID = normalizeId(d.taxID);
-      
-      monthsToCheck.forEach(({ month, monthIdx, year }) => {
-          const currentMonthNum = monthIdx + 1;
-          let fyMonth = isCalendarOnly ? 12 : (client?.fiscalYearEnd ? parseInt(client.fiscalYearEnd.split('/')[0], 10) : 12);
-
-          // Special Rule: 0619E (0001) and 0619F (0002) have no March, June, September, and December
-          if (['1', '2'].includes(normalizedTaxID)) {
-              if ([3, 6, 9, 12].includes(currentMonthNum)) return;
-          }
-
-          if (frequency === 'Quarterly') {
-              const diff = (currentMonthNum - fyMonth + 12) % 3;
-              if (diff !== 0) return;
-              const no4thQtrTaxIDs = ['0009', '0010', '0014', '0015'].map(id => normalizeId(id));
-              if (no4thQtrTaxIDs.includes(normalizedTaxID) && currentMonthNum === fyMonth) return;
-          } else if (frequency === 'Annual') {
-              if (currentMonthNum !== fyMonth) return;
-          }
-
-          const dueInfo = computeActualDueDate(month, String(year), d.dueDate, isCalendarOnly ? '12/31' : (client?.fiscalYearEnd || '12/31'));
-          const periodKey = `${String(currentMonthNum).padStart(2, '0')}/${year}`;
-          const match = context.retainerLogs?.find(l => normalizeId(l[0]) === normalizeId(d.deadlineID) && l[1] === periodKey);
-          
-          if (!match || !match[2]) { // Not filed yet
-             const compareDue = dueInfo.raw;
-             compareDue.setHours(12, 0, 0, 0);
-             const diff = compareDue.getTime() - now.getTime();
-             if (diff >= 0 && diff <= threeDaysMs) {
-                 approachingRetainers++;
-             } else if (diff < 0) {
-                 overdueRetainers++;
-             }
-          }
+      (context.specials || []).forEach(s => {
+          if (!isItemVisible(s.assignedStaff) || s.status === 'Completed' || !s.endDate) return;
+          const endDate = parseDateStr(s.endDate);
+          if (!endDate || isNaN(endDate.getTime())) return;
+          endDate.setHours(12, 0, 0, 0);
+          const diff = endDate.getTime() - now.getTime();
+          if (diff >= 0 && diff <= fiveDaysMs) approachingSpecials++;
+          else if (diff < 0) overdueSpecials++;
       });
-  });
 
-  // 2.5 Check Transmittals
-  let unuploadedTransmittals = 0;
-  (context.transmittals || []).forEach(t => {
-      if (!isManagerOrAbove && String(t.userID) !== String(user?.id)) return;
-      if (t.receiptUrl) return; // receiptUrl exists means status is 'Delivered', empty means 'Released'
+      const currentMonthIdx = now.getMonth();
+      const currentYear = now.getFullYear();
+      const monthsToCheck = [
+          { month: months[(currentMonthIdx - 2 + 12) % 12], monthIdx: (currentMonthIdx - 2 + 12) % 12, year: currentMonthIdx - 2 < 0 ? currentYear - 1 : currentYear },
+          { month: months[(currentMonthIdx - 1 + 12) % 12], monthIdx: (currentMonthIdx - 1 + 12) % 12, year: currentMonthIdx - 1 < 0 ? currentYear - 1 : currentYear },
+          { month: months[currentMonthIdx], monthIdx: currentMonthIdx, year: currentYear },
+          { month: months[(currentMonthIdx + 1) % 12], monthIdx: (currentMonthIdx + 1) % 12, year: currentYear + (currentMonthIdx === 11 ? 1 : 0) }
+      ];
+      const calendarOnlyTaxIDs = new Set(['0007', '0008', '0012', '0013', '0016', '0017', '0018', '0019', '0020', '0021', '0022'].map(id => normalizeId(id)));
+      const no4thQtrTaxIDs = new Set(['0009', '0010', '0014', '0015'].map(id => normalizeId(id)));
 
-      const creationDate = parseDateStr(t.date);
-      if (!creationDate) return;
-      creationDate.setHours(12, 0, 0, 0);
+      (context.deadlines || []).forEach(d => {
+          const retainer = retainerById.get(normalizeId(d.retainerID));
+          if (!retainer) return;
+          const client = clientById.get(normalizeId(retainer.clientId));
+          if (!client || client.status === 'Inactive') return;
 
-      const diffMs = now.getTime() - creationDate.getTime();
-      const threeDaysMsLimit = 3 * 24 * 60 * 60 * 1000;
+          const frequency = d.dueDate.startsWith('M') ? 'Monthly' :
+              d.dueDate.startsWith('Q') ? 'Quarterly' :
+                  (d.dueDate.startsWith('Y') || d.dueDate.startsWith('A')) ? 'Annual' : 'Monthly';
+          const normalizedTaxID = normalizeId(d.taxID);
+          const isCalendarOnly = calendarOnlyTaxIDs.has(normalizedTaxID);
 
-      if (diffMs >= threeDaysMsLimit) {
-          unuploadedTransmittals++;
-      }
-  });
+          monthsToCheck.forEach(({ month, monthIdx, year }) => {
+              const currentMonthNum = monthIdx + 1;
+              const fyMonth = isCalendarOnly ? 12 : (client?.fiscalYearEnd ? parseInt(client.fiscalYearEnd.split('/')[0], 10) : 12);
+
+              if (['1', '2'].includes(normalizedTaxID) && [3, 6, 9, 12].includes(currentMonthNum)) return;
+              if (frequency === 'Quarterly') {
+                  const diff = (currentMonthNum - fyMonth + 12) % 3;
+                  if (diff !== 0) return;
+                  if (no4thQtrTaxIDs.has(normalizedTaxID) && currentMonthNum === fyMonth) return;
+              } else if (frequency === 'Annual' && currentMonthNum !== fyMonth) {
+                  return;
+              }
+
+              const periodKey = `${String(currentMonthNum).padStart(2, '0')}/${year}`;
+              if (filedLogKeys.has(`${normalizeId(d.deadlineID)}|${periodKey}`)) return;
+
+              const dueInfo = computeActualDueDate(month, String(year), d.dueDate, isCalendarOnly ? '12/31' : (client?.fiscalYearEnd || '12/31'));
+              const compareDue = dueInfo.raw;
+              compareDue.setHours(12, 0, 0, 0);
+              const diff = compareDue.getTime() - now.getTime();
+              if (diff >= 0 && diff <= threeDaysMs) approachingRetainers++;
+              else if (diff < 0) overdueRetainers++;
+          });
+      });
+
+      (context.transmittals || []).forEach(t => {
+          if (!isManagerOrAbove && String(t.userID) !== String(user?.id)) return;
+          if (t.receiptUrl) return;
+          const creationDate = parseDateStr(t.date);
+          if (!creationDate) return;
+          creationDate.setHours(12, 0, 0, 0);
+          if (now.getTime() - creationDate.getTime() >= threeDaysMs) unuploadedTransmittals++;
+      });
+
+      return { approachingSpecials, overdueSpecials, approachingRetainers, overdueRetainers, unuploadedTransmittals };
+  }, [context.retainers, context.clients, context.retainerLogs, context.specials, context.deadlines, context.transmittals, isItemVisible, isManagerOrAbove, user?.id]);
+
+  const { approachingSpecials, overdueSpecials, approachingRetainers, overdueRetainers, unuploadedTransmittals } = dynamicCounts;
 
   // 3. Inject Dynamic Notifications
-  const dynamicNotifs = [];
+  const dynamicNotifs = useMemo(() => {
+  const dynamicNotifs: Notification[] = [];
 
   if (approachingRetainers > 0 || approachingSpecials > 0) {
       const summaryMsg = [];
@@ -184,7 +198,7 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
           title: 'Approaching Deadlines!',
           message: summaryMsg.join(' • '),
           type: 'Engagement',
-          link: '/engagements',
+          link: approachingRetainers > 0 ? '/retainers' : '/special-projects',
           isRead: false,
           createdAt: new Date().toISOString()
       });
@@ -201,7 +215,7 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
           title: 'Overdue Tasks!',
           message: summaryMsg.join(' • '),
           type: 'Overdue',
-          link: '/engagements',
+          link: overdueRetainers > 0 ? '/retainers' : '/special-projects',
           isRead: false,
           createdAt: new Date(Date.now() - 1000).toISOString()
       });
@@ -214,16 +228,19 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
           title: 'Pending Scan & Upload!',
           message: `${unuploadedTransmittals} transmittal(s) pending scan & upload for 3+ days`,
           type: 'TransmittalWarning',
-          link: '/operations',
+          link: '/transmittals',
           isRead: false,
           createdAt: new Date(Date.now() - 2000).toISOString()
       });
   }
 
-  userNotifications = [
+  return [
       ...dynamicNotifs,
-      ...userNotifications
+      ...persistedUserNotifications
   ];
+  }, [approachingRetainers, approachingSpecials, overdueRetainers, overdueSpecials, unuploadedTransmittals, user?.id, persistedUserNotifications]);
+
+  const userNotifications = dynamicNotifs;
 
   const unreadCount = userNotifications.filter(n => !n.isRead).length;
 
@@ -232,18 +249,20 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
       e?.stopPropagation();
       if (AUTO_NOTIF_IDS.includes(id)) return;
       try {
+          setPersistedNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
           await markNotificationRead(id);
-          await refreshData(true);
       } catch (err) {
+          loadPersistedNotifications();
       }
   };
 
   const handleMarkAllRead = async () => {
       if (!user) return;
       try {
+          setPersistedNotifications(prev => prev.map(n => String(n.userId) === String(user.id) ? { ...n, isRead: true } : n));
           await markAllNotificationsRead(user.id);
-          await refreshData(true);
       } catch (err) {
+          loadPersistedNotifications();
       }
   };
 
@@ -273,7 +292,11 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
           
           <div className="relative" ref={notifRef}>
             <button 
-              onClick={() => setNotificationsOpen(!notificationsOpen)}
+              onClick={() => {
+                const nextOpen = !notificationsOpen;
+                setNotificationsOpen(nextOpen);
+                if (nextOpen) loadPersistedNotifications();
+              }}
               className="text-neutral-dark dark:text-neutral-light relative p-1.5 hover:bg-neutral-light dark:hover:bg-gray-700 rounded-full transition-colors"
             >
               <Bell size={20} />
@@ -336,12 +359,11 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
           
           <div className="relative" ref={dropdownRef}>
             <button onClick={() => setDropdownOpen(!dropdownOpen)} className="flex items-center space-x-2">
-                {user?.avatarUrl && user.avatarUrl.trim() !== '' && !imgError ? (
+                {user?.avatarUrl && user.avatarUrl.trim() !== '' ? (
                   <img
                     src={user.avatarUrl}
                     alt="User Avatar"
                     className="w-8 h-8 rounded-full border border-neutral-medium object-cover"
-                    onError={() => setImgError(true)}
                   />
                 ) : (
                   <div className="w-8 h-8 rounded-full border border-neutral-medium bg-primary text-white flex items-center justify-center font-bold text-sm">

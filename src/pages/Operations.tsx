@@ -1,16 +1,18 @@
 import React, { useState, useContext, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocation } from 'react-router-dom';
 import { AppContext } from '../App';
-import { 
-    Plus, 
-    Search, 
-    FileText, 
-    Users, 
-    Upload, 
-    X, 
-    CheckCircle2, 
-    Loader2, 
-    Trash2, 
+import UserHoverCard from '../components/UserHoverCard';
+import {
+    Plus,
+    Search,
+    FileText,
+    Users,
+    Upload,
+    X,
+    CheckCircle2,
+    Loader2,
+    Trash2,
     ExternalLink,
     ChevronDown,
     Check,
@@ -28,6 +30,9 @@ const getDriveUrl = (idOrUrl: string) => {
     return `https://drive.google.com/file/d/${idOrUrl}/view?usp=sharing`;
 };
 
+const getUserFullName = (user: any) => `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
+const sortUsersByName = (users: any[]) => [...users].sort((a, b) => getUserFullName(a).localeCompare(getUserFullName(b)));
+
 const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, isDeleting }: any) => {
     if (!isOpen) return null;
     return createPortal(
@@ -37,7 +42,7 @@ const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, i
                     <div className="w-16 h-16 bg-rose-100 dark:bg-rose-900/30 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-600 dark:text-rose-400">
                         <Trash2 size={32} />
                     </div>
-                    
+
                     <h3 className="text-lg font-bold text-neutral-dark dark:text-white mb-2">
                         {title}
                     </h3>
@@ -46,14 +51,14 @@ const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, i
                     </p>
 
                     <div className="flex gap-3">
-                        <button 
+                        <button
                             onClick={onClose}
                             disabled={isDeleting}
                             className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold text-secondary hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
                         >
                             Cancel
                         </button>
-                        <button 
+                        <button
                             onClick={onConfirm}
                             disabled={isDeleting}
                             className="flex-1 px-4 py-2.5 bg-rose-600 text-white rounded-xl text-sm font-bold hover:bg-rose-700 shadow-lg shadow-rose-600/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
@@ -83,7 +88,7 @@ const TooltipPortal = ({ children, targetRef, showBelow, isOpen }: any) => {
             setCoords(null);
             return;
         }
-        
+
         const updatePosition = () => {
             const rect = targetRef.current.getBoundingClientRect();
             setCoords({
@@ -104,13 +109,13 @@ const TooltipPortal = ({ children, targetRef, showBelow, isOpen }: any) => {
     if (!isOpen || !coords) return null;
 
     return createPortal(
-        <div 
-            style={{ 
-                position: 'absolute', 
-                top: coords.top, 
-                left: coords.left, 
+        <div
+            style={{
+                position: 'absolute',
+                top: coords.top,
+                left: coords.left,
                 transform: `translateX(-50%) ${showBelow ? 'translateY(8px)' : 'translateY(-8px) translateY(-100%)'}`,
-                zIndex: 20000 
+                zIndex: 20000
             }}
             className="animate-in fade-in zoom-in-95 duration-200 pointer-events-auto"
         >
@@ -126,7 +131,7 @@ const AttendeeTooltipList = ({ attendeeIds, attendeeCount, staff, showBelow }: a
     const targetRef = useRef<HTMLDivElement>(null);
 
     return (
-        <div 
+        <div
             ref={targetRef}
             className="relative"
             onMouseEnter={() => setIsOpen(true)}
@@ -135,7 +140,7 @@ const AttendeeTooltipList = ({ attendeeIds, attendeeCount, staff, showBelow }: a
             <div className="w-[30px] h-[30px] rounded-full bg-neutral-light dark:bg-gray-700 border-2 border-white dark:border-gray-800 flex items-center justify-center text-[10px] font-black text-secondary shadow-sm cursor-help transition-transform hover:scale-110">
                 +{attendeeCount - 3}
             </div>
-            
+
             <TooltipPortal targetRef={targetRef} showBelow={showBelow} isOpen={isOpen}>
                 <div className="bg-neutral-dark/95 backdrop-blur-md text-white text-[10px] py-2.5 px-3.5 rounded-xl shadow-2xl border border-white/10 min-w-[160px] max-h-[180px] overflow-y-auto custom-scrollbar pointer-events-auto">
                     <ul className="space-y-1.5">
@@ -157,7 +162,8 @@ const AttendeeTooltipList = ({ attendeeIds, attendeeCount, staff, showBelow }: a
 
 const Operations: React.FC = () => {
     const context = useContext(AppContext);
-    const [activeTab, setActiveTab] = useState<'Transmittals' | 'Meetings'>('Transmittals');
+    const location = useLocation();
+    const activeTab: 'Transmittals' | 'Meetings' = location.pathname === '/meetings' ? 'Meetings' : 'Transmittals';
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -253,7 +259,7 @@ const Operations: React.FC = () => {
     };
 
     const showForm = activeTab === 'Transmittals' ? showTransmittalForm : showMeetingForm;
-    const setShowForm = activeTab === 'Transmittals' 
+    const setShowForm = activeTab === 'Transmittals'
         ? ((val: boolean) => val ? setShowTransmittalForm(true) : handleCloseTransmittalForm())
         : ((val: boolean) => val ? setShowMeetingForm(true) : handleCloseMeetingForm());
 
@@ -313,7 +319,7 @@ const Operations: React.FC = () => {
             });
 
             context?.showToast?.('Transmittal recorded!', 'success');
-            
+
             const newTransmittal = {
                 ...transmittalData,
                 transmittalID: result.transmittalID,
@@ -321,7 +327,7 @@ const Operations: React.FC = () => {
                 items: transmittalData.items.join('||'),
                 receiptUrl: ''
             };
-            
+
             // Automatically open the drawer for the newly added transmittal so they can download the PDF
             setSelectedTransmittal(newTransmittal);
 
@@ -511,34 +517,14 @@ const Operations: React.FC = () => {
                     <div className="flex items-center gap-2.5">
                         <div className="w-1.5 h-7 bg-primary rounded-full" />
                         <h1 className="text-3xl font-black text-neutral-dark dark:text-white tracking-tight">
-                            Operations Center
+                            {activeTab === 'Transmittals' ? 'Transmittals' : 'Meetings'}
                         </h1>
                     </div>
                     <p className="text-sm text-secondary dark:text-gray-300 font-medium pl-4 opacity-70 dark:opacity-100">
-                        Firm-wide transmittals and professional meeting logs
+                        {activeTab === 'Transmittals'
+                            ? 'Document handoffs, receipts, and receiver tracking'
+                            : 'Professional meeting logs, attendees, and minutes'}
                     </p>
-                </div>
-
-                {/* Enhanced Navigation Tabs */}
-                <div className="flex p-1 bg-neutral-light dark:bg-gray-900 rounded-xl shrink-0 border border-neutral-medium dark:border-gray-700 shadow-sm bg-white">
-                    <button 
-                        onClick={() => { setActiveTab('Transmittals'); handleCloseTransmittalForm(); handleCloseMeetingForm(); }}
-                        className={`flex items-center gap-2.5 px-6 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 ${activeTab === 'Transmittals' 
-                            ? 'bg-white dark:bg-gray-700 text-primary shadow-lg ring-1 ring-black/[0.03]' 
-                            : 'text-secondary hover:text-neutral-dark dark:hover:text-white hover:bg-black/5'}`}
-                    >
-                        <FileText size={16} />
-                        Transmittals
-                    </button>
-                    <button 
-                        onClick={() => { setActiveTab('Meetings'); handleCloseTransmittalForm(); handleCloseMeetingForm(); }}
-                        className={`flex items-center gap-2.5 px-6 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 ${activeTab === 'Meetings' 
-                            ? 'bg-white dark:bg-gray-700 text-primary shadow-lg ring-1 ring-black/[0.03]' 
-                            : 'text-secondary hover:text-neutral-dark dark:hover:text-white hover:bg-black/5'}`}
-                    >
-                        <Users size={16} />
-                        Meetings
-                    </button>
                 </div>
             </div>
 
@@ -548,7 +534,7 @@ const Operations: React.FC = () => {
                     {/* Integrated Search */}
                     <div className="relative group flex-1">
                         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-secondary/40 dark:text-gray-400/60 group-focus-within:text-primary transition-colors" size={16} />
-                        <input 
+                        <input
                             type="text"
                             placeholder={`Search ${activeTab.toLowerCase()} by subject or client...`}
                             value={searchQuery}
@@ -556,13 +542,13 @@ const Operations: React.FC = () => {
                             className="w-full pl-10 pr-4 py-2 bg-neutral-light/50 dark:bg-gray-900/50 border border-transparent focus:border-primary/20 rounded-xl text-[13px] font-medium text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all placeholder:text-secondary/30 dark:placeholder:text-gray-500"
                         />
                     </div>
-                    
+
                     <div className="w-px h-6 bg-neutral-medium dark:bg-gray-700 mx-1 hidden md:block" />
 
-                    <button 
+                    <button
                         onClick={() => setShowForm(!showForm)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 ${showForm 
-                            ? 'bg-rose-500 text-white hover:bg-rose-600' 
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 ${showForm
+                            ? 'bg-rose-500 text-white hover:bg-rose-600'
                             : 'bg-primary text-white hover:bg-primary-dark shadow-lg shadow-primary/20 active:scale-95'}`}
                     >
                         {showForm ? <X size={16} /> : <Plus size={16} />}
@@ -574,7 +560,7 @@ const Operations: React.FC = () => {
             {/* Tab Content */}
             <div className="space-y-6">
                 {activeTab === 'Transmittals' ? (
-                    <TransmittalSection 
+                    <TransmittalSection
                         showForm={showTransmittalForm}
                         setShowForm={setShowForm}
                         data={transmittalData}
@@ -599,7 +585,7 @@ const Operations: React.FC = () => {
                         startEditing={startEditingTransmittal}
                     />
                 ) : (
-                    <MeetingSection 
+                    <MeetingSection
                         showForm={showMeetingForm}
                         setShowForm={setShowForm}
                         data={meetingData}
@@ -623,7 +609,7 @@ const Operations: React.FC = () => {
                 )}
             </div>
 
-            <DeleteConfirmationModal 
+            <DeleteConfirmationModal
                 {...deleteModal}
                 onClose={closeDeleteModal}
             />
@@ -661,7 +647,7 @@ const ClientSearchableSelect = ({ clients, value, onChange }: any) => {
 
     return (
         <div className="relative" ref={dropdownRef}>
-            <div 
+            <div
                 onClick={() => setIsOpen(!isOpen)}
                 className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all cursor-pointer flex items-center justify-between"
             >
@@ -676,7 +662,7 @@ const ClientSearchableSelect = ({ clients, value, onChange }: any) => {
                     <div className="p-2 border-b border-neutral-medium dark:border-gray-700">
                         <div className="relative">
                             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-secondary/50" />
-                            <input 
+                            <input
                                 type="text"
                                 placeholder="Search clients..."
                                 value={search}
@@ -692,7 +678,7 @@ const ClientSearchableSelect = ({ clients, value, onChange }: any) => {
                             <div className="px-3 py-4 text-center text-xs text-secondary/50">No clients found</div>
                         ) : (
                             filteredClients.map((c: any) => (
-                                <div 
+                                <div
                                     key={c.id}
                                     onClick={() => {
                                         onChange(c.id);
@@ -717,8 +703,8 @@ const ClientSearchableSelect = ({ clients, value, onChange }: any) => {
 const TransmittalFormFields = ({ data, setData, clients, users, newItemText, setNewItemText, addItem, removeItem, context }: any) => (
     <div className="grid grid-cols-2 gap-x-4 gap-y-3">
         <div className="space-y-1 col-span-2 relative z-20">
-            <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.1em] ml-2 opacity-60">Client Entity</label>
-            <ClientSearchableSelect 
+            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Client Entity</label>
+            <ClientSearchableSelect
                 clients={clients}
                 value={data.clientID}
                 onChange={(id: string) => setData({ ...data, clientID: id })}
@@ -726,64 +712,66 @@ const TransmittalFormFields = ({ data, setData, clients, users, newItemText, set
         </div>
 
         <div className="space-y-1">
-            <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.1em] ml-2 opacity-60">Log Date</label>
-            <input 
+            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Log Date</label>
+            <input
                 type="date"
                 required
                 value={data.date}
                 onChange={(e) => setData({ ...data, date: e.target.value })}
-                className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all"
+                className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
             />
         </div>
 
         <div className="space-y-1">
-            <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.1em] ml-2 opacity-60">Staff</label>
-            <select 
+            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Staff</label>
+            <select
                 required
                 value={data.userID}
                 onChange={(e) => setData({ ...data, userID: e.target.value })}
-                className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all"
+                className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
             >
-                {(context?.user?.role === 'Admin' ? users : users.filter((u: any) => normalizeId(u.id) === normalizeId(context?.user?.id))).map((u: any) => (
+                {sortUsersByName((context?.user?.role === 'Admin' ? users : users.filter((u: any) => normalizeId(u.id) === normalizeId(context?.user?.id))).filter((u: any) => u.status === 'Active')).map((u: any) => (
                     <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
                 ))}
             </select>
         </div>
 
         <div className="space-y-1">
-            <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.1em] ml-2 opacity-60">Receiver's Name</label>
-            <input 
+            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Receiver Name</label>
+            <input
                 type="text"
-                placeholder="Leave blank for client default"
+                required
+                placeholder="Enter receiver name"
                 value={data.receiverName || ''}
                 onChange={(e) => setData({ ...data, receiverName: e.target.value })}
-                className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all"
+                className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold placeholder:font-medium focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
             />
         </div>
 
         <div className="space-y-1">
-            <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.1em] ml-2 opacity-60">Receiver's Address</label>
-            <input 
+            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Receiver Address</label>
+            <input
                 type="text"
-                placeholder="Leave blank for client default"
+                required
+                placeholder="Enter receiver address"
                 value={data.receiverAddress || ''}
                 onChange={(e) => setData({ ...data, receiverAddress: e.target.value })}
-                className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all"
+                className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold placeholder:font-medium focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
             />
         </div>
 
         <div className="col-span-2 space-y-2">
-            <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.1em] ml-2 opacity-60">Documents Manifest (Items)</label>
+            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Documents Manifest</label>
             <div className="flex gap-2">
-                <input 
+                <input
                     type="text"
                     placeholder="Add item..."
                     value={newItemText}
                     onChange={(e) => setNewItemText(e.target.value)}
                     onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addItem())}
-                    className="flex-1 px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all"
+                    className="flex-1 px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold placeholder:font-medium focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
                 />
-                <button 
+                <button
                     type="button"
                     onClick={addItem}
                     className="p-2.5 bg-primary text-white rounded-xl hover:bg-primary-dark transition-all"
@@ -791,14 +779,24 @@ const TransmittalFormFields = ({ data, setData, clients, users, newItemText, set
                     <Plus size={16} />
                 </button>
             </div>
-            
-            <div className="flex flex-col gap-2 mt-3 max-h-[180px] overflow-y-auto custom-scrollbar pr-2">
+
+            <div className="flex flex-col gap-2 mt-3 max-h-[112px] overflow-y-auto custom-scrollbar pr-2">
                 {data.items.map((item: string, idx: number) => (
                     <div key={idx} className="flex items-start gap-3 p-3 bg-neutral-light/30 dark:bg-gray-800/30 border border-neutral-medium/50 dark:border-gray-700/50 rounded-xl animate-in fade-in slide-in-from-left-2 duration-200">
                         <span className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 border border-primary/20 text-[10px] font-black text-primary shrink-0 shadow-sm mt-0.5">
                             {idx + 1}
                         </span>
-                        <span className="flex-1 text-xs font-bold text-neutral-dark dark:text-white leading-relaxed break-words pt-1">{item}</span>
+                        <input
+                            type="text"
+                            value={item}
+                            onChange={(e) => {
+                                const nextItems = [...data.items];
+                                nextItems[idx] = e.target.value;
+                                setData({ ...data, items: nextItems });
+                            }}
+                            className="flex-1 px-2 py-1 bg-transparent border-none text-xs font-bold text-neutral-dark dark:text-white leading-relaxed outline-none focus:bg-white/70 dark:focus:bg-gray-900/70 focus:ring-2 focus:ring-primary/10 rounded-lg transition-all"
+                            placeholder="Document item..."
+                        />
                         <button type="button" onClick={() => removeItem(idx)} className="text-secondary/60 hover:text-rose-500 transition-colors p-1.5 rounded-lg hover:bg-rose-500/10 shrink-0">
                             <Trash2 size={14} />
                         </button>
@@ -815,14 +813,15 @@ const StaffMultiSelect = ({ staff, selectedIds, toggleSelection }: any) => {
     const dropdownRef = useRef<HTMLDivElement>(null);
 
     const filteredStaff = useMemo(() => {
-        if (!search) return staff;
-        return staff.filter((s: any) => 
+        const sortedStaff = sortUsersByName(staff.filter((s: any) => s.status === 'Active'));
+        if (!search) return sortedStaff;
+        return sortedStaff.filter((s: any) =>
             `${s.firstName} ${s.lastName}`.toLowerCase().includes(search.toLowerCase())
         );
     }, [staff, search]);
 
     const selectedStaff = useMemo(() => {
-        return (selectedIds || []).map((id: string) => staff.find((s: any) => normalizeId(s.id) === normalizeId(id))).filter(Boolean);
+        return sortUsersByName((selectedIds || []).map((id: string) => staff.find((s: any) => normalizeId(s.id) === normalizeId(id))).filter(Boolean));
     }, [selectedIds, staff]);
 
     React.useEffect(() => {
@@ -839,7 +838,7 @@ const StaffMultiSelect = ({ staff, selectedIds, toggleSelection }: any) => {
         <div className="space-y-3 relative z-10" ref={dropdownRef}>
             {/* The Dropdown selector */}
             <div className="relative">
-                <div 
+                <div
                     onClick={() => setIsOpen(!isOpen)}
                     className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all cursor-pointer flex items-center justify-between"
                 >
@@ -852,7 +851,7 @@ const StaffMultiSelect = ({ staff, selectedIds, toggleSelection }: any) => {
                         <div className="p-2 border-b border-neutral-medium dark:border-gray-700">
                             <div className="relative">
                                 <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-secondary/50" />
-                                <input 
+                                <input
                                     type="text"
                                     placeholder="Search staff..."
                                     value={search}
@@ -870,17 +869,12 @@ const StaffMultiSelect = ({ staff, selectedIds, toggleSelection }: any) => {
                                 filteredStaff.map((u: any) => {
                                     const isSelected = selectedIds?.includes(u.id);
                                     return (
-                                        <div 
+                                        <div
                                             key={u.id}
                                             onClick={() => toggleSelection(u.id)}
                                             className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-between ${isSelected ? 'bg-primary/10 text-primary' : 'text-neutral-dark dark:text-white hover:bg-neutral-light dark:hover:bg-gray-700'}`}
                                         >
-                                            <div className="flex items-center gap-2">
-                                                <div className={`w-6 h-6 rounded-md flex items-center justify-center text-[8px] font-black ${isSelected ? 'bg-primary text-white' : 'bg-neutral-light dark:bg-gray-800 text-secondary'}`}>
-                                                    {u.firstName[0]}{u.lastName[0]}
-                                                </div>
-                                                {u.firstName} {u.lastName}
-                                            </div>
+                                            <span>{u.firstName} {u.lastName}</span>
                                             {isSelected && <Check size={12} className="text-primary" />}
                                         </div>
                                     );
@@ -914,31 +908,31 @@ const StaffMultiSelect = ({ staff, selectedIds, toggleSelection }: any) => {
 const MeetingFormFields = ({ data, setData, staff, toggleStaffSelection, selectedFile, onFileSelect, isUploading }: any) => (
     <div className="grid grid-cols-2 gap-x-4 gap-y-3">
         <div className="space-y-1 col-span-2">
-            <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.1em] ml-2 opacity-60">Meeting Subject / Topic</label>
-            <input 
+            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Meeting Subject / Topic</label>
+            <input
                 required
                 type="text"
                 placeholder="e.g. Monthly Review"
                 value={data.subject}
                 onChange={(e) => setData({ ...data, subject: e.target.value })}
-                className="w-full px-4 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all"
+                className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold placeholder:font-medium focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
             />
         </div>
 
         <div className="space-y-1 col-span-2">
-            <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.1em] ml-2 opacity-60">Meeting Date</label>
-            <input 
+            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Meeting Date</label>
+            <input
                 type="date"
                 required
                 value={data.date}
                 onChange={(e) => setData({ ...data, date: e.target.value })}
-                className="w-full px-4 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all"
+                className="w-full px-3.5 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
             />
         </div>
 
         <div className="col-span-2 space-y-1 relative z-20">
-            <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.1em] ml-2 opacity-60">Attendees (Firm Staff)</label>
-            <StaffMultiSelect 
+            <label className="text-[10px] font-black text-secondary dark:text-gray-400 ml-1">Attendees</label>
+            <StaffMultiSelect
                 staff={staff}
                 selectedIds={data.userIDs}
                 toggleSelection={toggleStaffSelection}
@@ -946,8 +940,8 @@ const MeetingFormFields = ({ data, setData, staff, toggleStaffSelection, selecte
         </div>
 
         <div className="col-span-2">
-            <FileUploadField 
-                label="Minutes of Meeting (MOM)"
+            <FileUploadField
+                label="Minutes of Meeting"
                 file={selectedFile}
                 url={data.momUrl}
                 onFileSelect={onFileSelect}
@@ -975,7 +969,7 @@ const FileUploadField = ({ file, url, label, onFileSelect, isUploading }: { file
                             <p className="text-[10px] font-black text-primary uppercase tracking-tight truncate">{file.name}</p>
                             <p className="text-[8px] text-secondary font-bold opacity-60">Ready to sync</p>
                         </div>
-                        <button 
+                        <button
                             type="button"
                             onClick={() => onFileSelect(null)}
                             disabled={isUploading}
@@ -997,7 +991,7 @@ const FileUploadField = ({ file, url, label, onFileSelect, isUploading }: { file
                         </div>
                     </div>
                 ) : (
-                    <button 
+                    <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
                         disabled={isUploading}
@@ -1009,11 +1003,11 @@ const FileUploadField = ({ file, url, label, onFileSelect, isUploading }: { file
                         </div>
                     </button>
                 )}
-                <input 
-                    type="file" 
+                <input
+                    type="file"
                     ref={fileInputRef}
                     onChange={(e) => e.target.files?.[0] && onFileSelect(e.target.files[0])}
-                    className="hidden" 
+                    className="hidden"
                 />
             </div>
         </div>
@@ -1021,7 +1015,7 @@ const FileUploadField = ({ file, url, label, onFileSelect, isUploading }: { file
 };
 
 // --- Transmittal Components ---
-const TransmittalSection = ({ 
+const TransmittalSection = ({
     showForm, setShowForm, data, setData, newItemText, setNewItemText, addItem, removeItem, onSubmit, isSubmitting, clients, staff, history, searchQuery, isUploadingMain, formatDateForUI,
     selectedItem, setSelectedItem, openDeleteModal,
     isEditing, setIsEditing, startEditing
@@ -1029,19 +1023,22 @@ const TransmittalSection = ({
     const context = useContext(AppContext);
     const [isUploadingLocal, setIsUploadingLocal] = useState(false);
     const [selectedFileInDrawer, setSelectedFileInDrawer] = useState<File | null>(null);
+    const clientById = useMemo(() => new Map(clients.map((c: any) => [normalizeId(c.id), c])), [clients]);
+    const staffById = useMemo(() => new Map(staff.map((u: any) => [normalizeId(u.id), u])), [staff]);
     const filteredHistory = useMemo(() => {
         let personalHistory = history;
         const isManagerOrAbove = context?.user?.role === 'Admin' || context?.user?.role === 'Manager' || context?.user?.role === 'Supervisor';
         if (!isManagerOrAbove) {
             personalHistory = history.filter((t: any) => normalizeId(t.userID) === normalizeId(context?.user?.id));
         }
+        const query = searchQuery.toLowerCase();
         return personalHistory.filter((t: any) => {
-            const client = clients.find((c: any) => normalizeId(c.id) === normalizeId(t.clientID));
-            return (client?.name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                   t.items?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                   formatDateForUI(t.date).toLowerCase().includes(searchQuery.toLowerCase()));
+            const client = clientById.get(normalizeId(t.clientID)) as any;
+            return (client?.name?.toLowerCase().includes(query) ||
+                   t.items?.toLowerCase().includes(query) ||
+                   formatDateForUI(t.date).toLowerCase().includes(query));
         }).reverse();
-    }, [history, clients, searchQuery, formatDateForUI, context?.user]);
+    }, [history, clientById, searchQuery, formatDateForUI, context?.user]);
 
     const printRef = useRef<HTMLDivElement>(null);
 
@@ -1054,16 +1051,16 @@ const TransmittalSection = ({
         <div className="space-y-6">
             {showForm && createPortal(
                 <div className="fixed inset-0 z-[10001] flex items-center justify-center p-4 bg-neutral-dark/40 backdrop-blur-sm animate-in fade-in duration-300">
-                    <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-md rounded-[2rem] shadow-2xl border border-white dark:border-gray-700 w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-300">
+                    <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-md rounded-3xl shadow-2xl border border-white dark:border-gray-700 w-full max-w-xl max-h-[92vh] overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col">
                         {/* Modal Header */}
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-medium dark:border-gray-700 bg-neutral-light/30 dark:bg-gray-900/30">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-medium/70 dark:border-gray-700 bg-neutral-light/30 dark:bg-gray-900/30 shrink-0">
                             <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 bg-primary/10 rounded-xl flex items-center justify-center text-primary border border-primary/20">
-                                    <FileText size={18} />
+                                <div className="w-10 h-10 bg-primary/10 rounded-2xl flex items-center justify-center text-primary border border-primary/20">
+                                    <FileText size={19} />
                                 </div>
                                 <div>
-                                    <h2 className="text-base font-black text-neutral-dark dark:text-white tracking-tight leading-tight">Log Transmittal</h2>
-                                    <p className="text-[8px] font-black uppercase tracking-[0.2em] text-secondary opacity-50 mt-0.5">Physical & Digital Document Release</p>
+                                    <h2 className="text-lg font-black text-neutral-dark dark:text-white tracking-tight leading-tight">Log Transmittal</h2>
+                                    <p className="text-[10px] font-bold text-secondary dark:text-gray-400 mt-1">Record released documents and receiver details.</p>
                                 </div>
                             </div>
                             <button
@@ -1075,8 +1072,8 @@ const TransmittalSection = ({
                             </button>
                         </div>
 
-                        <form onSubmit={onSubmit} className="p-6 space-y-4">
-                            <TransmittalFormFields 
+                        <form onSubmit={onSubmit} className="px-5 pt-3 pb-5 space-y-4">
+                            <TransmittalFormFields
                                 data={data}
                                 setData={setData}
                                 clients={clients}
@@ -1087,8 +1084,8 @@ const TransmittalSection = ({
                                 removeItem={removeItem}
                                 context={context}
                             />
-                            <div className="pt-4 border-t border-neutral-medium dark:border-gray-700 mt-2">
-                                <button 
+                            <div className="mt-5 pt-4 border-t border-neutral-medium/70 dark:border-gray-700">
+                                <button
                                     type="submit"
                                     disabled={isSubmitting || !data.clientID || data.items.length === 0}
                                     className="w-full py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-xl shadow-primary/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
@@ -1132,13 +1129,13 @@ const TransmittalSection = ({
                             </thead>
                             <tbody className="divide-y divide-neutral-medium/30 dark:divide-gray-700/50">
                 {filteredHistory.map((t: any) => {
-                                    const client = clients.find((c: any) => normalizeId(c.id) === normalizeId(t.clientID));
-                                    const staffMember = staff.find((u: any) => normalizeId(u.id) === normalizeId(t.userID));
+                                    const client = clientById.get(normalizeId(t.clientID)) as any;
+                                    const staffMember = staffById.get(normalizeId(t.userID)) as any;
                                     const itemsCount = t.items?.split('||').length || 0;
 
                                     return (
-                                        <tr 
-                                            key={t.transmittalID} 
+                                        <tr
+                                            key={t.transmittalID}
                                             onClick={() => setSelectedItem(t)}
                                             className="group cursor-pointer transition-all duration-300 hover:bg-primary/[0.02] dark:hover:bg-primary/[0.05] relative hover:z-[10] border-b border-neutral-medium/30 dark:border-gray-800/50"
                                         >
@@ -1150,20 +1147,7 @@ const TransmittalSection = ({
                                                 <span className="text-[11px] font-bold text-secondary dark:text-gray-300">{itemsCount} items</span>
                                             </td>
                                             <td className="px-5 py-2.5">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-6 h-6 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center overflow-hidden shrink-0">
-                                                        {staffMember?.avatarUrl ? (
-                                                            <img src={staffMember.avatarUrl} alt={staffMember.firstName} className="w-full h-full object-cover" />
-                                                        ) : (
-                                                            <span className="text-[10px] font-black text-primary">
-                                                                {staffMember ? `${staffMember.firstName[0]}${staffMember.lastName[0]}`.toUpperCase() : '??'}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                    <span className="text-[12px] font-bold text-neutral-dark dark:text-white truncate block max-w-[150px]">
-                                                        {staffMember ? `${staffMember.firstName} ${staffMember.lastName}` : 'Unknown Staff'}
-                                                    </span>
-                                                </div>
+                                                <UserHoverCard user={staffMember} fallbackName="Unknown Staff" size="md" showName />
                                             </td>
                                             <td className="px-5 py-2.5 text-[11px] font-black text-secondary/80 dark:text-gray-400">{formatDateForUI(t.date)}</td>
                                             <td className="px-5 py-2.5">
@@ -1186,7 +1170,7 @@ const TransmittalSection = ({
                                                     ) : (
                                                         <div className="p-1.5 text-secondary dark:text-gray-500 opacity-20 dark:opacity-40"><ExternalLink size={14} /></div>
                                                     )}
-                                                    <button 
+                                                    <button
                                                         onClick={(e) => {
                                                             e.stopPropagation();
                                                             openDeleteModal(
@@ -1232,7 +1216,7 @@ const TransmittalSection = ({
                                 <div>
                                     <div className="flex items-center gap-3 mb-1">
                                         <h2 className="text-xl font-black text-neutral-dark dark:text-white tracking-tight leading-tight">
-                                            {clients.find((c: any) => normalizeId(c.id) === normalizeId(selectedItem.clientID))?.name || 'Client Details'}
+                                            {(clientById.get(normalizeId(selectedItem.clientID)) as any)?.name || 'Client Details'}
                                         </h2>
                                         {selectedItem.receiptUrl ? (
                                             <div className="px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-[0.15em] border flex items-center gap-1.5 shadow-sm bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">
@@ -1286,11 +1270,11 @@ const TransmittalSection = ({
 
                         {/* Hidden Print Template */}
                         <div style={{ position: 'absolute', top: '-9999px', left: '-9999px', overflow: 'hidden' }}>
-                            <TransmittalPrintTemplate 
+                            <TransmittalPrintTemplate
                                 ref={printRef}
                                 transmittal={selectedItem}
-                                client={clients.find((c: any) => normalizeId(c.id) === normalizeId(selectedItem?.clientID))}
-                                staffMember={staff.find((u: any) => normalizeId(u.id) === normalizeId(selectedItem?.userID))}
+                                client={clientById.get(normalizeId(selectedItem?.clientID))}
+                                staffMember={staffById.get(normalizeId(selectedItem?.userID))}
                                 logoUrl="/logo.png"
                             />
                         </div>
@@ -1298,31 +1282,39 @@ const TransmittalSection = ({
                         {/* Drawer Content */}
                         <div className="flex-1 overflow-y-auto p-8 space-y-8 bg-gradient-to-br from-neutral-light/50 via-white to-primary/5 dark:from-gray-900 dark:via-gray-900 dark:to-primary/10 custom-scrollbar">
                             {isEditing ? (
-                                <form onSubmit={onSubmit} className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <div className="w-1 h-4 bg-primary rounded-full" />
-                                        <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">Update Transmittal Details</h3>
+                                <form onSubmit={onSubmit} className="space-y-5 animate-in slide-in-from-bottom-4 duration-300">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div className="flex items-start gap-3">
+                                            <div className="w-1 h-4 bg-primary rounded-full mt-0.5" />
+                                            <div>
+                                                <h3 className="text-sm font-black text-neutral-dark dark:text-white">Update Transmittal Details</h3>
+                                            </div>
+                                        </div>
                                     </div>
-                                    <TransmittalFormFields 
-                                        data={data}
-                                        setData={setData}
-                                        clients={clients}
-                                        users={staff}
-                                        newItemText={newItemText}
-                                        setNewItemText={setNewItemText}
-                                        addItem={addItem}
-                                        removeItem={removeItem}
-                                        context={context}
-                                    />
-                                    <div className="pt-6 border-t border-neutral-medium dark:border-gray-700 flex gap-3">
-                                        <button 
+
+                                    <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-5">
+                                        <TransmittalFormFields
+                                            data={data}
+                                            setData={setData}
+                                            clients={clients}
+                                            users={staff}
+                                            newItemText={newItemText}
+                                            setNewItemText={setNewItemText}
+                                            addItem={addItem}
+                                            removeItem={removeItem}
+                                            context={context}
+                                        />
+                                    </div>
+
+                                    <div className="sticky bottom-0 -mx-8 -mb-8 px-8 py-4 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-t border-neutral-medium/70 dark:border-gray-700 flex gap-3">
+                                        <button
                                             type="button"
                                             onClick={() => setIsEditing(false)}
                                             className="flex-1 py-3 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest text-secondary hover:bg-neutral-light dark:hover:bg-gray-800 transition-all border border-neutral-medium dark:border-gray-700"
                                         >
                                             Cancel
                                         </button>
-                                        <button 
+                                        <button
                                             type="submit"
                                             disabled={isSubmitting || !data.clientID || data.items.length === 0}
                                             className="flex-[2] py-3 px-4 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-xl shadow-primary/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
@@ -1335,112 +1327,45 @@ const TransmittalSection = ({
                             ) : (
                                 <>
                             <div className="space-y-4">
-                                <div className="flex items-center gap-2">
-                                    <div className="w-1 h-4 bg-primary rounded-full" />
-                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">Log Overview</h3>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-1 h-4 bg-primary rounded-full" />
+                                        <h3 className="text-sm font-black text-neutral-dark dark:text-white">Transmittal Details</h3>
+                                    </div>
+                                    <span className="text-[10px] font-black text-primary bg-primary/5 border border-primary/10 px-2.5 py-1 rounded-full">
+                                        {selectedItem.items?.split('||').length || 0} item{(selectedItem.items?.split('||').length || 0) === 1 ? '' : 's'}
+                                    </span>
                                 </div>
-                                <div className="grid grid-cols-2 gap-x-8 gap-y-6 bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 p-6 relative overflow-hidden group">
-                                    <div className="absolute -top-24 -right-24 w-48 h-48 bg-primary/5 rounded-full blur-3xl transition-all group-hover:bg-primary/10" />
-                                    <div className="space-y-1 relative z-1">
-                                        <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Date Logged</p>
-                                        <p className="text-sm font-black text-neutral-dark dark:text-white tracking-tight">{formatDateForUI(selectedItem.date)}</p>
-                                    </div>
-                                    <div className="space-y-1 relative z-1">
-                                        <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Representative</p>
-                                        <p className="text-sm font-black text-neutral-dark dark:text-white tracking-tight">
-                                            {(() => {
-                                                const staffMember = staff.find((u: any) => normalizeId(u.id) === normalizeId(selectedItem.userID));
-                                                return staffMember ? `${staffMember.firstName} ${staffMember.lastName}` : '---';
-                                            })()}
-                                        </p>
-                                    </div>
-                                    <div className="space-y-1 relative z-1">
-                                        <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Receiver's Name</p>
-                                        <p className="text-sm font-black text-neutral-dark dark:text-white tracking-tight">
-                                            {selectedItem.receiverName || <span className="opacity-50 italic">Default Client</span>}
-                                        </p>
-                                    </div>
-                                    <div className="space-y-1 relative z-1">
-                                        <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Receiver's Address</p>
-                                        <p className="text-sm font-black text-neutral-dark dark:text-white tracking-tight">
-                                            {selectedItem.receiverAddress || <span className="opacity-50 italic">Default Client Address</span>}
-                                        </p>
-                                    </div>
-                                    <div className="space-y-1 relative z-1 col-span-2">
-                                        <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Attachment</p>
-                                        {selectedItem.receiptUrl ? (
-                                            <div className="flex items-center justify-between group/att bg-neutral-light/30 dark:bg-gray-800/40 p-4 rounded-2xl border border-neutral-medium/30 dark:border-gray-700/50">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary border border-primary/10">
-                                                        <FileText size={16} />
-                                                    </div>
-                                                    <a href={getDriveUrl(selectedItem.receiptUrl)} target="_blank" rel="noopener noreferrer" className="text-[13px] font-black text-neutral-dark dark:text-white hover:text-primary transition-colors flex items-center gap-2">
-                                                        View Official Slip <ExternalLink size={12} />
-                                                    </a>
-                                                </div>
-                                                 <button 
-                                                    onClick={() => {
-                                                        openDeleteModal(
-                                                            "Delete Attachment?",
-                                                            "Are you sure you want to remove this transmittal slip? This will permanently delete the file from Drive.",
-                                                            async () => {
-                                                                try {
-                                                                    const fileId = selectedItem.receiptUrl;
-                                                                    // Only try to delete from drive if it's an ID (not legacy URL)
-                                                                    if (fileId && !fileId.startsWith('http')) {
-                                                                        await deleteFile(fileId);
-                                                                    }
-                                                                    await updateTransmittal(selectedItem.transmittalID, { ...selectedItem, receiptUrl: '' });
-                                                                    setSelectedItem({ ...selectedItem, receiptUrl: '' });
-                                                                    context?.showToast?.('Attachment removed successfully', 'success');
-                                                                    context?.refreshData();
-                                                                } catch (e) {
-                                                                    context?.showToast?.('Failed to delete attachment', 'error');
-                                                                    throw e;
-                                                                }
-                                                            }
-                                                        );
-                                                    }}
-                                                    className="p-2 text-secondary/40 hover:text-rose-500 hover:bg-rose-500/10 rounded-xl transition-all"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
+
+                                <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-4">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
+                                        <div className="p-4">
+                                            <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Date Logged</p>
+                                            <p className="text-sm font-black text-neutral-dark dark:text-white">{formatDateForUI(selectedItem.date)}</p>
+                                        </div>
+                                        <div className="p-4">
+                                            <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Representative</p>
+                                            <div className="flex items-center gap-2">
+                                                {(() => {
+                                                    const staffMember = staffById.get(normalizeId(selectedItem.userID)) as any;
+                                                    return <UserHoverCard user={staffMember} fallbackName="---" size="lg" showName nameClassName="text-sm font-black text-neutral-dark dark:text-white truncate" />;
+                                                })()}
                                             </div>
-                                        ) : (
-                                            <div className="space-y-3">
-                                                <FileUploadField 
-                                                    label="Select Transmittal Slip"
-                                                    file={selectedFileInDrawer}
-                                                    url=""
-                                                    onFileSelect={setSelectedFileInDrawer}
-                                                    isUploading={isUploadingLocal}
-                                                />
-                                                {selectedFileInDrawer && (
-                                                    <button 
-                                                        onClick={async () => {
-                                                            setIsUploadingLocal(true);
-                                                            try {
-                                                                const uploadRes = await uploadFile(selectedFileInDrawer, 'Transmittal');
-                                                                await updateTransmittal(selectedItem.transmittalID, { ...selectedItem, receiptUrl: uploadRes.id });
-                                                                setSelectedItem({ ...selectedItem, receiptUrl: uploadRes.id });
-                                                                setSelectedFileInDrawer(null);
-                                                                context?.showToast?.('Slip synchronized successfully!', 'success');
-                                                                context?.refreshData();
-                                                            } catch (e) {
-                                                                context?.showToast?.('Upload failed. Please try again.', 'error');
-                                                            } finally {
-                                                                setIsUploadingLocal(false);
-                                                            }
-                                                        }}
-                                                        disabled={isUploadingLocal}
-                                                        className="w-full py-2.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-lg shadow-primary/20 transition-all flex items-center justify-center gap-2"
-                                                    >
-                                                        {isUploadingLocal ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                                                        Sync Official Slip
-                                                    </button>
-                                                )}
-                                            </div>
-                                        )}
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
+                                        <div className="p-4">
+                                            <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Receiver Name</p>
+                                            <p className="text-sm font-black text-neutral-dark dark:text-white">
+                                                {selectedItem.receiverName || <span className="font-bold text-secondary/60 italic">Default client name</span>}
+                                            </p>
+                                        </div>
+                                        <div className="p-4">
+                                            <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Receiver Address</p>
+                                            <p className="text-sm font-black text-neutral-dark dark:text-white leading-snug">
+                                                {selectedItem.receiverAddress || <span className="font-bold text-secondary/60 italic">Default client address</span>}
+                                            </p>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1448,14 +1373,110 @@ const TransmittalSection = ({
                             <div className="space-y-4">
                                 <div className="flex items-center gap-2">
                                     <div className="w-1 h-4 bg-primary rounded-full" />
-                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">Documents Manifest</h3>
+                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white">Official Slip</h3>
                                 </div>
-                                <div className="bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 overflow-hidden">
+                                <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-4">
+                                    {selectedItem.receiptUrl ? (
+                                        <div className="flex items-center justify-between gap-4">
+                                            <div className="flex items-center gap-3 min-w-0">
+                                                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-600 border border-emerald-500/20 shrink-0">
+                                                    <CheckCircle2 size={18} />
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-black text-neutral-dark dark:text-white">Slip attached</p>
+                                                    <a href={getDriveUrl(selectedItem.receiptUrl)} target="_blank" rel="noopener noreferrer" className="text-[11px] font-bold text-primary hover:text-primary-dark transition-colors inline-flex items-center gap-1">
+                                                        View uploaded file <ExternalLink size={11} />
+                                                    </a>
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={() => {
+                                                    openDeleteModal(
+                                                        "Delete Attachment?",
+                                                        "Are you sure you want to remove this transmittal slip? This will permanently delete the file from Drive.",
+                                                        async () => {
+                                                            try {
+                                                                const fileId = selectedItem.receiptUrl;
+                                                                // Only try to delete from drive if it's an ID (not legacy URL)
+                                                                if (fileId && !fileId.startsWith('http')) {
+                                                                    await deleteFile(fileId);
+                                                                }
+                                                                await updateTransmittal(selectedItem.transmittalID, { ...selectedItem, receiptUrl: '' });
+                                                                setSelectedItem({ ...selectedItem, receiptUrl: '' });
+                                                                context?.showToast?.('Attachment removed successfully', 'success');
+                                                                context?.refreshData();
+                                                            } catch (e) {
+                                                                context?.showToast?.('Failed to delete attachment', 'error');
+                                                                throw e;
+                                                            }
+                                                        }
+                                                    );
+                                                }}
+                                                className="p-2 text-secondary/60 hover:text-rose-500 hover:bg-rose-500/10 rounded-xl transition-all shrink-0"
+                                            >
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            <div className="flex items-start gap-3">
+                                                <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-600 border border-amber-500/20 shrink-0">
+                                                    <Upload size={18} />
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-black text-neutral-dark dark:text-white">No slip attached yet</p>
+                                                    <p className="text-[11px] font-medium text-secondary dark:text-gray-400 mt-0.5">Upload the signed or received transmittal slip when available.</p>
+                                                </div>
+                                            </div>
+                                            <FileUploadField
+                                                label="Select Transmittal Slip"
+                                                file={selectedFileInDrawer}
+                                                url=""
+                                                onFileSelect={setSelectedFileInDrawer}
+                                                isUploading={isUploadingLocal}
+                                            />
+                                            {selectedFileInDrawer && (
+                                                <button
+                                                    onClick={async () => {
+                                                        setIsUploadingLocal(true);
+                                                        try {
+                                                            const uploadRes = await uploadFile(selectedFileInDrawer, 'Transmittal');
+                                                            await updateTransmittal(selectedItem.transmittalID, { ...selectedItem, receiptUrl: uploadRes.id });
+                                                            setSelectedItem({ ...selectedItem, receiptUrl: uploadRes.id });
+                                                            setSelectedFileInDrawer(null);
+                                                            context?.showToast?.('Slip synchronized successfully!', 'success');
+                                                            context?.refreshData();
+                                                        } catch (e) {
+                                                            context?.showToast?.('Upload failed. Please try again.', 'error');
+                                                        } finally {
+                                                            setIsUploadingLocal(false);
+                                                        }
+                                                    }}
+                                                    disabled={isUploadingLocal}
+                                                    className="w-full py-2.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-lg shadow-primary/20 transition-all flex items-center justify-center gap-2"
+                                                >
+                                                    {isUploadingLocal ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                                                    Sync Official Slip
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-1 h-4 bg-primary rounded-full" />
+                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white">Documents Manifest</h3>
+                                </div>
+                                <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
                                     <div className="divide-y divide-neutral-medium/30 dark:divide-gray-700/50">
                                         {selectedItem.items?.split('||').map((item: string, idx: number) => (
-                                            <div key={idx} className="px-6 py-4 flex items-center gap-4 hover:bg-primary/[0.02] transition-colors">
-                                                <span className="text-xs font-black text-primary/40">{String(idx + 1).padStart(2, '0')}</span>
-                                                <p className="text-[13px] font-black text-neutral-dark dark:text-white tracking-tight">
+                                            <div key={idx} className="px-5 py-3.5 flex items-start gap-3 hover:bg-primary/[0.02] transition-colors">
+                                                <span className="mt-0.5 flex items-center justify-center w-7 h-7 rounded-xl bg-primary/10 border border-primary/15 text-[10px] font-black text-primary shrink-0">
+                                                    {String(idx + 1).padStart(2, '0')}
+                                                </span>
+                                                <p className="text-[13px] font-bold text-neutral-dark dark:text-white leading-relaxed">
                                                     {item.toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase())}
                                                 </p>
                                             </div>
@@ -1475,7 +1496,7 @@ const TransmittalSection = ({
 };
 
 // --- Meeting Components ---
-const MeetingSection = ({ 
+const MeetingSection = ({
     showForm, setShowForm, data, setData, onSubmit, isSubmitting, staff, history, searchQuery, selectedFile, onFileSelect, isUploading, formatDateForUI,
     selectedItem, setSelectedItem, openDeleteModal,
     isEditing, setIsEditing, startEditing
@@ -1483,38 +1504,41 @@ const MeetingSection = ({
     const context = useContext(AppContext);
     const [isUploadingLocal, setIsUploadingLocal] = useState(false);
     const [selectedFileInDrawer, setSelectedFileInDrawer] = useState<File | null>(null);
+    const staffById = useMemo(() => new Map(staff.map((u: any) => [normalizeId(u.id), u])), [staff]);
     const filteredHistory = useMemo(() => {
         let teamHistory = history;
         const role = context?.user?.role;
-        
+
         if (role !== 'Admin' && role !== 'Manager' && role !== 'Supervisor' && context?.user?.team) {
             teamHistory = history.filter((m: any) => {
                 if (!m.userIDs) return false;
                 const attendeeIds = m.userIDs.split(',');
                 return attendeeIds.some((id: string) => {
-                    const attendee = staff.find((u: any) => normalizeId(u.id) === normalizeId(id));
+                    const attendee = staffById.get(normalizeId(id)) as any;
                     return attendee && attendee.team === context?.user?.team;
                 });
             });
         }
 
+        const query = searchQuery.toLowerCase();
         return teamHistory.filter((m: any) => {
-            return (m.subject?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                   formatDateForUI(m.date).toLowerCase().includes(searchQuery.toLowerCase()));
+            return (m.subject?.toLowerCase().includes(query) ||
+                   formatDateForUI(m.date).toLowerCase().includes(query));
         }).reverse();
-    }, [history, searchQuery, formatDateForUI, context?.user, staff]);
+    }, [history, searchQuery, formatDateForUI, context?.user, staffById]);
 
     const allowedStaffForForm = useMemo(() => {
         const role = context?.user?.role;
+        const activeStaff = staff.filter((u: any) => u.status === 'Active');
         if (role === 'Admin' || role === 'Manager' || role === 'Supervisor') {
-            return staff;
+            return sortUsersByName(activeStaff);
         }
-        return staff.filter((u: any) => 
-            u.team === context?.user?.team || 
-            u.role === 'Admin' || 
-            u.role === 'Manager' || 
+        return sortUsersByName(activeStaff.filter((u: any) =>
+            u.team === context?.user?.team ||
+            u.role === 'Admin' ||
+            u.role === 'Manager' ||
             u.role === 'Supervisor'
-        );
+        ));
     }, [staff, context?.user]);
 
     const toggleStaffSelection = (id: string) => {
@@ -1530,16 +1554,16 @@ const MeetingSection = ({
         <div className="space-y-6">
             {showForm && createPortal(
                 <div className="fixed inset-0 z-[10001] flex items-center justify-center p-4 bg-neutral-dark/40 backdrop-blur-sm animate-in fade-in duration-300">
-                    <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-md rounded-[2rem] shadow-2xl border border-white dark:border-gray-700 w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-300">
+                    <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-md rounded-3xl shadow-2xl border border-white dark:border-gray-700 w-full max-w-xl overflow-hidden animate-in zoom-in-95 duration-300">
                         {/* Modal Header */}
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-medium dark:border-gray-700 bg-neutral-light/30 dark:bg-gray-900/30">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-medium/70 dark:border-gray-700 bg-neutral-light/30 dark:bg-gray-900/30">
                             <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 bg-primary/10 rounded-xl flex items-center justify-center text-primary border border-primary/20">
-                                    <Users size={18} />
+                                <div className="w-10 h-10 bg-primary/10 rounded-2xl flex items-center justify-center text-primary border border-primary/20">
+                                    <Users size={19} />
                                 </div>
                                 <div>
-                                    <h2 className="text-base font-black text-neutral-dark dark:text-white tracking-tight leading-tight">Secure Minutes</h2>
-                                    <p className="text-[8px] font-black uppercase tracking-[0.2em] text-secondary opacity-50 mt-0.5">Meeting Documentation & Archiving</p>
+                                    <h2 className="text-lg font-black text-neutral-dark dark:text-white tracking-tight leading-tight">Record Meeting</h2>
+                                    <p className="text-[10px] font-bold text-secondary dark:text-gray-400 mt-1">Store meeting details, attendees, and minutes.</p>
                                 </div>
                             </div>
                             <button
@@ -1551,8 +1575,8 @@ const MeetingSection = ({
                             </button>
                         </div>
 
-                        <form onSubmit={onSubmit} className="p-6 space-y-4">
-                                <MeetingFormFields 
+                        <form onSubmit={onSubmit} className="px-5 pt-3 pb-5 space-y-4">
+                                <MeetingFormFields
                                     data={data}
                                     setData={setData}
                                     staff={allowedStaffForForm}
@@ -1562,8 +1586,8 @@ const MeetingSection = ({
                                 isUploading={isUploading}
                             />
 
-                            <div className="pt-4 border-t border-neutral-medium dark:border-gray-700 mt-2">
-                                <button 
+                            <div className="mt-5 pt-4 border-t border-neutral-medium/70 dark:border-gray-700">
+                                <button
                                     type="submit"
                                     disabled={isSubmitting || !data.subject || data.userIDs.length === 0}
                                     className="w-full py-3 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-xl shadow-primary/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
@@ -1596,7 +1620,7 @@ const MeetingSection = ({
                         <table className="w-full text-left">
                             <thead className="bg-neutral-light dark:bg-gray-700/30 border-b border-neutral-medium dark:border-gray-700">
                                 <tr>
-                                    
+
                                     <th className="px-5 py-3 text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest">Subject</th>
                                     <th className="px-5 py-3 text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest">Attendees</th>
                                     <th className="px-5 py-3 text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest">Date</th>
@@ -1611,8 +1635,8 @@ const MeetingSection = ({
                                     const showBelow = rowIndex < 2 && rowIndex < filteredHistory.length - 1;
 
                                     return (
-                                        <tr 
-                                            key={m.meetingID} 
+                                        <tr
+                                            key={m.meetingID}
                                             onClick={() => setSelectedItem(m)}
                                             className="group cursor-pointer transition-all duration-300 hover:bg-primary/[0.02] dark:hover:bg-primary/[0.05] relative hover:z-[50] border-b border-neutral-medium/30 dark:border-gray-800/50"
                                         >
@@ -1622,20 +1646,15 @@ const MeetingSection = ({
                                              <td className="px-5 py-2.5">
                                                 <div className="flex -space-x-2.5">
                                                     {attendeeIds.slice(0, 3).map((id: string, idx: number) => {
-                                                        const staffMember = staff.find((u: any) => normalizeId(u.id) === normalizeId(id));
-                                                        const initials = staffMember ? `${staffMember.firstName[0]}${staffMember.lastName[0]}`.toUpperCase() : '??';
+                                                        const staffMember = staffById.get(normalizeId(id)) as any;
                                                         return (
-                                                            <div key={idx} className="w-[30px] h-[30px] rounded-full bg-primary/10 border-2 border-white dark:border-gray-800 flex items-center justify-center overflow-hidden shrink-0 shadow-sm" title={staffMember ? `${staffMember.firstName} ${staffMember.lastName}` : 'User'}>
-                                                                {staffMember?.avatarUrl ? (
-                                                                    <img src={staffMember.avatarUrl} alt={staffMember.firstName} className="w-full h-full object-cover" />
-                                                                ) : (
-                                                                    <span className="text-[10px] font-black text-primary">{initials}</span>
-                                                                )}
+                                                            <div key={idx} className="rounded-full border-2 border-white dark:border-gray-800 shadow-sm bg-white dark:bg-gray-800">
+                                                                <UserHoverCard user={staffMember} fallbackName="User" size="md" />
                                                             </div>
                                                         );
                                                     })}
                                                     {attendeeCount > 3 && (
-                                                        <AttendeeTooltipList 
+                                                        <AttendeeTooltipList
                                                             attendeeIds={attendeeIds}
                                                             attendeeCount={attendeeCount}
                                                             staff={staff}
@@ -1658,7 +1677,7 @@ const MeetingSection = ({
                                                     ) : (
                                                         <div className="p-1.5 text-secondary dark:text-gray-500 opacity-20 dark:opacity-40"><ExternalLink size={14} /></div>
                                                     )}
-                                                    <button 
+                                                    <button
                                                         onClick={(e) => {
                                                             e.stopPropagation();
                                                             openDeleteModal(
@@ -1738,29 +1757,33 @@ const MeetingSection = ({
                         {/* Drawer Content */}
                         <div className="flex-1 overflow-y-auto p-8 space-y-8 bg-gradient-to-br from-neutral-light/50 via-white to-primary/5 dark:from-gray-900 dark:via-gray-900 dark:to-primary/10 custom-scrollbar">
                             {isEditing ? (
-                                <form onSubmit={onSubmit} className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
-                                    <div className="flex items-center gap-2 mb-2">
+                                <form onSubmit={onSubmit} className="space-y-5 animate-in slide-in-from-bottom-4 duration-300">
+                                    <div className="flex items-center gap-2">
                                         <div className="w-1 h-4 bg-primary rounded-full" />
-                                        <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">Update Meeting Details</h3>
+                                        <h3 className="text-sm font-black text-neutral-dark dark:text-white">Update Meeting Details</h3>
                                     </div>
-                                    <MeetingFormFields 
-                                        data={data}
-                                        setData={setData}
-                                        staff={allowedStaffForForm}
-                                        toggleStaffSelection={toggleStaffSelection}
-                                        selectedFile={selectedFile}
-                                        onFileSelect={onFileSelect}
-                                        isUploading={isSubmitting}
-                                    />
-                                    <div className="pt-6 border-t border-neutral-medium dark:border-gray-700 flex gap-3">
-                                        <button 
+
+                                    <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-5">
+                                        <MeetingFormFields
+                                            data={data}
+                                            setData={setData}
+                                            staff={allowedStaffForForm}
+                                            toggleStaffSelection={toggleStaffSelection}
+                                            selectedFile={selectedFile}
+                                            onFileSelect={onFileSelect}
+                                            isUploading={isSubmitting}
+                                        />
+                                    </div>
+
+                                    <div className="sticky bottom-0 -mx-8 -mb-8 px-8 py-4 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-t border-neutral-medium/70 dark:border-gray-700 flex gap-3">
+                                        <button
                                             type="button"
                                             onClick={() => setIsEditing(false)}
                                             className="flex-1 py-3 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest text-secondary hover:bg-neutral-light dark:hover:bg-gray-800 transition-all border border-neutral-medium dark:border-gray-700"
                                         >
                                             Cancel
                                         </button>
-                                        <button 
+                                        <button
                                             type="submit"
                                             disabled={isSubmitting || !data.subject || data.userIDs?.length === 0}
                                             className="flex-[2] py-3 px-4 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-xl shadow-primary/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
@@ -1776,18 +1799,17 @@ const MeetingSection = ({
 
                                 <div className="flex items-center gap-2">
                                     <div className="w-1 h-4 bg-primary rounded-full" />
-                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">Meeting Particulars</h3>
+                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white">Meeting Particulars</h3>
                                 </div>
-                                <div className="grid grid-cols-2 gap-x-8 gap-y-6 bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 p-6 relative overflow-hidden group">
-                                    <div className="absolute -top-24 -right-24 w-48 h-48 bg-primary/5 rounded-full blur-3xl transition-all group-hover:bg-primary/10" />
-                                    <div className="space-y-1 relative z-1">
-                                        <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Date Held</p>
-                                        <p className="text-sm font-black text-neutral-dark dark:text-white tracking-tight">{formatDateForUI(selectedItem.date)}</p>
+                                <div className="grid grid-cols-2 gap-x-8 gap-y-6 bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-5">
+                                    <div className="space-y-1">
+                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400">Date Held</p>
+                                        <p className="text-sm font-black text-neutral-dark dark:text-white">{formatDateForUI(selectedItem.date)}</p>
                                     </div>
-                                    <div className="space-y-1 relative z-1 col-span-2">
-                                        <p className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest opacity-50 dark:opacity-100">Minutes of Meeting (MOM)</p>
+                                    <div className="space-y-2 col-span-2">
+                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400">Minutes of Meeting</p>
                                         {selectedItem.momUrl ? (
-                                            <div className="flex items-center justify-between group/att bg-neutral-light/30 dark:bg-gray-800/40 p-4 rounded-2xl border border-neutral-medium/30 dark:border-gray-700/50">
+                                            <div className="flex items-center justify-between group/att bg-neutral-light/30 dark:bg-gray-900/40 p-4 rounded-2xl border border-neutral-medium/50 dark:border-gray-700/50">
                                                 <div className="flex items-center gap-3">
                                                     <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary border border-primary/10">
                                                         <FileText size={16} />
@@ -1796,7 +1818,7 @@ const MeetingSection = ({
                                                         View Meeting Minutes <ExternalLink size={12} />
                                                     </a>
                                                 </div>
-                                                 <button 
+                                                 <button
                                                     onClick={() => {
                                                         openDeleteModal(
                                                             "Delete Document?",
@@ -1825,7 +1847,7 @@ const MeetingSection = ({
                                             </div>
                                         ) : (
                                             <div className="space-y-3">
-                                                <FileUploadField 
+                                                <FileUploadField
                                                     label="Select Minutes File"
                                                     file={selectedFileInDrawer}
                                                     url=""
@@ -1833,7 +1855,7 @@ const MeetingSection = ({
                                                     isUploading={isUploadingLocal}
                                                 />
                                                 {selectedFileInDrawer && (
-                                                    <button 
+                                                    <button
                                                         onClick={async () => {
                                                             setIsUploadingLocal(true);
                                                             try {
@@ -1865,22 +1887,16 @@ const MeetingSection = ({
                             <div className="space-y-4">
                                 <div className="flex items-center gap-2">
                                     <div className="w-1 h-4 bg-primary rounded-full" />
-                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">Firm Attendees</h3>
+                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white">Firm Attendees</h3>
                                 </div>
-                                <div className="bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[1.5rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 p-4">
+                                <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-4">
                                     <div className="grid grid-cols-2 gap-2 max-h-[160px] overflow-y-auto custom-scrollbar pr-1">
                                         {selectedItem.userIDs?.split(',').map((id: string, idx: number) => {
-                                            const staffMember = staff.find((u: any) => normalizeId(u.id) === normalizeId(id));
+                                            const staffMember = staffById.get(normalizeId(id)) as any;
                                             if (!staffMember) return null;
                                             return (
                                                 <div key={idx} className="flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-primary/5 transition-colors group/staff border border-transparent hover:border-primary/10">
-                                                    <div className="w-6 h-6 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center overflow-hidden shrink-0 group-hover/staff:scale-110 transition-transform">
-                                                        {staffMember.avatarUrl ? (
-                                                            <img src={staffMember.avatarUrl} alt={staffMember.firstName} className="w-full h-full object-cover" />
-                                                        ) : (
-                                                            <span className="text-[8px] font-black text-primary">{staffMember.firstName[0]}{staffMember.lastName[0]}</span>
-                                                        )}
-                                                    </div>
+                                                    <UserHoverCard user={staffMember} fallbackName={`${staffMember.firstName} ${staffMember.lastName}`} size="md" />
                                                     <div className="min-w-0 flex-1">
                                                         <p className="text-[10px] font-bold text-neutral-dark dark:text-white capitalize truncate leading-tight">{staffMember.firstName} {staffMember.lastName}</p>
                                                         <p className="text-[8px] font-black text-secondary/50 uppercase tracking-widest truncate leading-tight">{staffMember.role}</p>

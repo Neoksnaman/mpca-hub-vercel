@@ -1,7 +1,8 @@
-import React, { useState, useContext, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useContext, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { AppContext } from '../App';
+import UserHoverCard from '../components/UserHoverCard';
 import {
     Loader2,
     Filter,
@@ -24,7 +25,7 @@ import {
     AlertTriangle
 } from 'lucide-react';
 import { UserRole, Status } from '../types';
-import { fetchAllData, addRetainerLog, updateRetainerLog, addTask, addActivity, updateTask, updateActivity, deleteActivity, deleteTask, updateSpecial, addNotification } from '../services/googleSheetsService';
+import { fetchAllData, addRetainerLog, updateRetainerLog, addTask, addActivity, updateTask, updateActivity, deleteActivity, deleteTask, updateSpecial, addNotification, fetchSpecialWorklog } from '../services/googleSheetsService';
 import { months, computeActualDueDate } from '../utils/dateUtils';
 
 const normalizeId = (id: any) => String(id || '').trim().replace(/^0+/, '') || '0';
@@ -34,6 +35,14 @@ const formatDisplayDate = (dateStr: string) => {
     const [m, d, y] = dateStr.split('/');
     const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
     return date.toLocaleDateString('default', { month: 'long', day: 'numeric', year: 'numeric' });
+};
+
+const specialStatusOrder: Record<string, number> = {
+    Overdue: 0,
+    Blocked: 1,
+    'In Progress': 2,
+    Planning: 3,
+    Completed: 4
 };
 
 const Engagements: React.FC = () => {
@@ -46,9 +55,15 @@ const Engagements: React.FC = () => {
     const allUsers = context?.allUsers || [];
     const retainerLogs = context?.retainerLogs || [];
 
-    const [activeTab, setActiveTab] = useState<'Retainer' | 'Special'>('Retainer');
-    const [groupBy, setGroupBy] = useState<'None' | 'Client' | 'Compliance' | 'Staff'>('None');
-    const [searchQuery, setSearchQuery] = useState('');
+    const location = useLocation();
+    const navigate = useNavigate();
+    const activeTab: 'Retainer' | 'Special' = location.pathname === '/special-projects' ? 'Special' : 'Retainer';
+    const [retainerGroupBy, setRetainerGroupBy] = useState<'None' | 'Client' | 'Compliance' | 'Staff'>('None');
+    const [specialGroupBy, setSpecialGroupBy] = useState<'None' | 'Client' | 'Staff' | 'Status'>('Status');
+    const [retainerSearchQuery, setRetainerSearchQuery] = useState('');
+    const [specialSearchQuery, setSpecialSearchQuery] = useState('');
+    const [retainerPage, setRetainerPage] = useState(1);
+    const [specialPage, setSpecialPage] = useState(1);
     const [selectedItem, setSelectedItem] = useState<any | null>(null);
     const [isDetailOpen, setIsDetailOpen] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -68,16 +83,30 @@ const Engagements: React.FC = () => {
     const [editActivityDesc, setEditActivityDesc] = useState('');
     const [editActivityDate, setEditActivityDate] = useState('');
     const [activeMenuActivityId, setActiveMenuActivityId] = useState<string | null>(null);
-
-    const location = useLocation();
+    const [worklogTasks, setWorklogTasks] = useState<any[]>([]);
+    const [worklogActivities, setWorklogActivities] = useState<any[]>([]);
+    const [isWorklogLoading, setIsWorklogLoading] = useState(false);
 
     // Auto-switch tab based on navigation state
     useEffect(() => {
-        if (location.state && (location.state as any).activeTab) {
-            setActiveTab((location.state as any).activeTab);
+        if (location.state) {
+            const navState = location.state as any;
+            const targetTab = navState.activeTab;
+            if (targetTab === 'Special' && location.pathname !== '/special-projects') {
+                navigate('/special-projects', { replace: true, state: location.state });
+                return;
+            }
+            if (targetTab === 'Retainer' && location.pathname !== '/retainers') {
+                navigate('/retainers', { replace: true, state: location.state });
+                return;
+            }
             
-            if ((location.state as any).specialId && specials.length > 0) {
-                const targetSpecialId = (location.state as any).specialId;
+            if (navState.specialId && specials.length > 0) {
+                if (location.pathname !== '/special-projects') {
+                    navigate('/special-projects', { replace: true, state: location.state });
+                    return;
+                }
+                const targetSpecialId = navState.specialId;
                 const specialObj = specials.find(s => normalizeId(s.id) === normalizeId(targetSpecialId));
                 if (specialObj) {
                     const client = clients.find(c => normalizeId(c.id) === normalizeId(specialObj.clientId));
@@ -94,7 +123,7 @@ const Engagements: React.FC = () => {
             // Clear state after using it to prevent sticky tab on refresh
             window.history.replaceState({}, document.title);
         }
-    }, [location.state, specials, clients]);
+    }, [location.state, location.pathname, specials, clients, navigate]);
     const [showDeleteActivityModal, setShowDeleteActivityModal] = useState(false);
     const [activityToDelete, setActivityToDelete] = useState<any | null>(null);
     const [showDeleteTaskModal, setShowDeleteTaskModal] = useState(false);
@@ -116,6 +145,30 @@ const Engagements: React.FC = () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
     }, [activeMenuActivityId]);
+
+    const loadSpecialWorklog = async (specialID: string) => {
+        setIsWorklogLoading(true);
+        try {
+            const worklog = await fetchSpecialWorklog(specialID);
+            setWorklogTasks(worklog.taskLog || []);
+            setWorklogActivities(worklog.activityLog || []);
+        } catch (error: any) {
+            context?.showToast?.(error.message || 'Failed to load project worklog', 'error');
+            setWorklogTasks([]);
+            setWorklogActivities([]);
+        } finally {
+            setIsWorklogLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (isDetailOpen && activeTab === 'Special' && selectedItem?.id) {
+            loadSpecialWorklog(selectedItem.id);
+        } else if (!isDetailOpen) {
+            setWorklogTasks([]);
+            setWorklogActivities([]);
+        }
+    }, [isDetailOpen, activeTab, selectedItem?.id]);
 
     const toggleTaskExpansion = (taskId: string) => {
         const newSet = new Set(expandedTasks);
@@ -164,8 +217,7 @@ const Engagements: React.FC = () => {
 
         // Validation: If status is being set to Completed, all tasks must be completed first
         if (newStatus === 'Completed') {
-            const relatedTasks = (context?.taskLog || []).filter(t => normalizeId(t.specialID) === normalizeId(selectedItem.id));
-            const incompleteTasks = relatedTasks.filter(t => t.status !== 'Completed');
+            const incompleteTasks = worklogTasks.filter(t => t.status !== 'Completed');
 
             if (incompleteTasks.length > 0) {
                 context?.showToast(`Cannot complete engagement. ${incompleteTasks.length} task(s) are still pending.`, 'error');
@@ -189,21 +241,13 @@ const Engagements: React.FC = () => {
         if (!selectedItem || !newTaskName) return;
         setIsProcessing(true);
         try {
-            const maxId = (context?.taskLog || []).reduce((max, t) => {
-                const id = parseInt(t.taskID);
-                return isNaN(id) ? max : Math.max(max, id);
-            }, 0);
-            const nextId = maxId + 1;
-            const formattedId = nextId.toString().padStart(4, '0');
-
             await addTask({
-                taskID: formattedId,
                 specialID: selectedItem.id,
                 taskName: newTaskName,
                 status: 'Pending'
             });
             context?.showToast('Task added successfully!', 'success');
-            await context?.refreshData();
+            await loadSpecialWorklog(selectedItem.id);
             setIsAddingTask(false);
             setNewTaskName('');
         } catch (error: any) {
@@ -221,7 +265,7 @@ const Engagements: React.FC = () => {
                 status: editTaskStatus
             });
 
-            const taskObj = context?.taskLog.find(t => t.taskID === taskId);
+            const taskObj = worklogTasks.find(t => t.taskID === taskId);
             const specialEng = context?.specials.find(s => s.id === taskObj?.specialID);
             if (specialEng?.assignedStaff) {
                  const staffObj = allUsers.find(u => `${u.firstName} ${u.lastName}` === specialEng.assignedStaff || u.firstName === specialEng.assignedStaff);
@@ -231,13 +275,13 @@ const Engagements: React.FC = () => {
                          title: 'Task Updated',
                          message: `Task "${editTaskName}" was updated to ${editTaskStatus}.`,
                          type: 'Engagement',
-                         link: '/engagements'
+                         link: '/special-projects'
                      }).catch(() => {});
                  }
             }
 
             context?.showToast('Task updated successfully!', 'success');
-            await context?.refreshData();
+            if (selectedItem?.id) await loadSpecialWorklog(selectedItem.id);
             setEditingTaskId(null);
         } catch (error: any) {
             context?.showToast('Failed to update task: ' + error.message, 'error');
@@ -251,19 +295,11 @@ const Engagements: React.FC = () => {
 
         setIsProcessing(true);
         try {
-            const maxId = (context.activityLog || []).reduce((max, a) => {
-                const id = parseInt(a.activityID);
-                return isNaN(id) ? max : Math.max(max, id);
-            }, 0);
-            const nextId = maxId + 1;
-            const formattedId = nextId.toString().padStart(4, '0');
-
             // Format date from YYYY-MM-DD to MM/DD/YYYY
             const [y, m, d] = activityDate.split('-');
             const formattedDate = `${m}/${d}/${y}`;
 
             const newActivity = {
-                activityID: formattedId,
                 taskID: taskID,
                 dateCompleted: formattedDate,
                 description: newActivityDesc
@@ -271,7 +307,7 @@ const Engagements: React.FC = () => {
 
             const success = await addActivity(newActivity);
             if (success) {
-                const taskObj = context.taskLog.find(t => t.taskID === taskID);
+                const taskObj = worklogTasks.find(t => t.taskID === taskID);
                 const specialEng = context.specials.find(s => s.id === taskObj?.specialID);
                 if (specialEng?.assignedStaff) {
                      const staffObj = allUsers.find(u => `${u.firstName} ${u.lastName}` === specialEng.assignedStaff || u.firstName === specialEng.assignedStaff);
@@ -281,7 +317,7 @@ const Engagements: React.FC = () => {
                              title: 'New Activity Logged',
                              message: `Progress logged on task "${taskObj?.taskName}": ${newActivityDesc}`,
                              type: 'Engagement',
-                             link: '/engagements'
+                             link: '/special-projects'
                          }).catch(() => {});
                      }
                 }
@@ -289,7 +325,7 @@ const Engagements: React.FC = () => {
                 setAddingActivityToTaskId(null);
                 setNewActivityDesc('');
                 context.showToast?.('Progress logged successfully!', 'success');
-                await context.refreshData();
+                if (selectedItem?.id) await loadSpecialWorklog(selectedItem.id);
             }
         } catch (error: any) {
             context.showToast?.('Failed to log progress: ' + error.message, 'error');
@@ -312,8 +348,8 @@ const Engagements: React.FC = () => {
             });
 
             if (success) {
-                const actObj = context.activityLog.find(a => a.activityID === activityID);
-                const taskObj = context.taskLog.find(t => t.taskID === actObj?.taskID);
+                const actObj = worklogActivities.find(a => a.activityID === activityID);
+                const taskObj = worklogTasks.find(t => t.taskID === actObj?.taskID);
                 const specialEng = context.specials.find(s => s.id === taskObj?.specialID);
                 if (specialEng?.assignedStaff) {
                      const staffObj = allUsers.find(u => `${u.firstName} ${u.lastName}` === specialEng.assignedStaff || u.firstName === specialEng.assignedStaff);
@@ -323,14 +359,14 @@ const Engagements: React.FC = () => {
                              title: 'Activity Updated',
                              message: `Activity updated for task "${taskObj?.taskName}".`,
                              type: 'Engagement',
-                             link: '/engagements'
+                             link: '/special-projects'
                          }).catch(() => {});
                      }
                 }
 
                 setEditingActivityId(null);
                 context.showToast?.('Activity updated successfully!', 'success');
-                await context.refreshData();
+                if (selectedItem?.id) await loadSpecialWorklog(selectedItem.id);
             }
         } catch (error: any) {
             context.showToast?.('Failed to update activity: ' + error.message, 'error');
@@ -349,7 +385,7 @@ const Engagements: React.FC = () => {
                 setShowDeleteActivityModal(false);
                 setActivityToDelete(null);
                 context.showToast?.('Activity log deleted successfully!', 'success');
-                await context.refreshData();
+                if (selectedItem?.id) await loadSpecialWorklog(selectedItem.id);
             }
         } catch (error: any) {
             context.showToast?.('Failed to delete activity: ' + error.message, 'error');
@@ -368,7 +404,7 @@ const Engagements: React.FC = () => {
                 setShowDeleteTaskModal(false);
                 setTaskToDelete(null);
                 context.showToast?.('Task and all associated progress logs deleted successfully!', 'success');
-                await context.refreshData();
+                if (selectedItem?.id) await loadSpecialWorklog(selectedItem.id);
             }
         } catch (error: any) {
             context.showToast?.('Failed to delete task: ' + error.message, 'error');
@@ -382,19 +418,72 @@ const Engagements: React.FC = () => {
         client: 'All',
         month: new Date(new Date().setMonth(new Date().getMonth() - 1)).toLocaleString('default', { month: 'long' }),
         year: String(new Date().getFullYear()),
-        compliance: 'All'
-    });    const years = Array.from({ length: 25 }, (_, i) => String(2026 + i));
+        compliance: 'All',
+        status: 'All'
+    });
+    const years = Array.from({ length: 25 }, (_, i) => String(2026 + i));
 
     // Special Filters
     const [specialFilter, setSpecialFilter] = useState({
-        client: 'All',
         staff: 'All',
         status: 'All',
         priority: 'All',
         due: 'All'
     });
+    const pageSize = 25;
 
     const isManagerOrAbove = user?.role === UserRole.MANAGER || user?.role === UserRole.SUPERVISOR || user?.role === UserRole.ADMIN;
+    const canUseRetainerStaffOverview = isManagerOrAbove || user?.role === UserRole.SENIOR;
+
+    const hasAppliedRetainerDefaultGroup = useRef(false);
+
+    useEffect(() => {
+        if (!hasAppliedRetainerDefaultGroup.current && canUseRetainerStaffOverview) {
+            setRetainerGroupBy('Staff');
+            hasAppliedRetainerDefaultGroup.current = true;
+        }
+    }, [canUseRetainerStaffOverview]);
+
+    const lookupMaps = useMemo(() => {
+        const retainerById = new Map<string, any>();
+        retainers.forEach(r => retainerById.set(normalizeId(r.id), r));
+
+        const clientById = new Map<string, any>();
+        clients.forEach(c => clientById.set(normalizeId(c.id), c));
+
+        const taxById = new Map<string, any>();
+        (context?.taxCompliances || []).forEach(tc => taxById.set(normalizeId(tc.taxID), tc));
+
+        const serviceById = new Map<string, any>();
+        (context?.services || []).forEach(s => serviceById.set(normalizeId(s.id), s));
+
+        const userByName = new Map<string, any>();
+        allUsers.forEach(u => {
+            userByName.set(String(u.id), u);
+            userByName.set(u.firstName, u);
+            userByName.set(`${u.firstName} ${u.lastName}`, u);
+        });
+
+        const retainerLogByDeadlinePeriod = new Map<string, any[]>();
+        retainerLogs.forEach(l => retainerLogByDeadlinePeriod.set(`${normalizeId(l[0])}|${l[1]}`, l));
+
+        return { retainerById, clientById, taxById, serviceById, userByName, retainerLogByDeadlinePeriod };
+    }, [retainers, clients, context?.taxCompliances, context?.services, allUsers, retainerLogs]);
+
+    const isAssignedVisible = useCallback((assignedStaff: string) => {
+        if (isManagerOrAbove) return true;
+        const staffName = String(assignedStaff || '').trim();
+        const isOwn = staffName === user?.firstName || staffName === `${user?.firstName} ${user?.lastName}`;
+        if (user?.role === UserRole.STAFF) return isOwn;
+        if (user?.role === UserRole.SENIOR) {
+            const staff = lookupMaps.userByName.get(staffName);
+            return isOwn || staff?.team === user.team;
+        }
+        return true;
+    }, [isManagerOrAbove, lookupMaps.userByName, user]);
+
+    const calendarOnlyTaxIDs = useMemo(() => new Set(['0007', '0008', '0012', '0013', '0016', '0017', '0018', '0019', '0020', '0021', '0022'].map(id => normalizeId(id))), []);
+    const no4thQtrTaxIDs = useMemo(() => new Set(['0009', '0010', '0014', '0015'].map(id => normalizeId(id))), []);
 
     useEffect(() => {
         if (selectedItem) {
@@ -418,20 +507,21 @@ const Engagements: React.FC = () => {
 
 
     // --- Tab 1: Retainer Monitoring Logic ---
-    const retainerInstances = useMemo(() => {
+    const retainerAvailableInstances = useMemo(() => {
+        if (activeTab !== 'Retainer') return [];
         const deadlines = context?.deadlines || [];
         const currentMonth = retainerFilter.month;
         const currentYear = retainerFilter.year;
 
         const instances = deadlines.map(d => {
-            const retainer = retainers.find(r => normalizeId(r.id) === normalizeId(d.retainerID));
+            const retainer = lookupMaps.retainerById.get(normalizeId(d.retainerID));
             if (!retainer) return null;
 
-            const client = clients.find(c => normalizeId(c.id) === normalizeId(retainer.clientId));
+            const client = lookupMaps.clientById.get(normalizeId(retainer.clientId));
             if (!client || client.status === 'Inactive') return null;
 
-            const compliance = d.taxID ? context?.taxCompliances?.find(tc => tc.taxID === d.taxID) : null;
-            const service = !d.taxID ? context?.services?.find(s => normalizeId(s.id) === normalizeId(d.serviceID)) : null;
+            const compliance = d.taxID ? lookupMaps.taxById.get(normalizeId(d.taxID)) : null;
+            const service = !d.taxID ? lookupMaps.serviceById.get(normalizeId(d.serviceID)) : null;
 
             const complianceName = compliance?.complianceName || service?.name || 'General Compliance';
 
@@ -440,8 +530,7 @@ const Engagements: React.FC = () => {
                 d.dueDate.startsWith('Q') ? 'Quarterly' :
                     (d.dueDate.startsWith('Y') || d.dueDate.startsWith('A')) ? 'Annual' : 'Monthly';
 
-            const calendarOnlyTaxIDs = ['0007', '0008', '0012', '0013', '0016', '0017', '0018', '0019', '0020', '0021', '0022'].map(id => normalizeId(id));
-            const isCalendarOnly = calendarOnlyTaxIDs.includes(normalizeId(d.taxID));
+            const isCalendarOnly = calendarOnlyTaxIDs.has(normalizeId(d.taxID));
 
             const fyMonth = isCalendarOnly ? 12 : (client?.fiscalYearEnd ? parseInt(client.fiscalYearEnd.split('/')[0]) : 12);
             const monthIdx = months.indexOf(currentMonth) + 1;
@@ -457,8 +546,7 @@ const Engagements: React.FC = () => {
                 if (diff !== 0) return null;
 
                 // Special Rule: Some IDs have no 4th Qtr
-                const no4thQtrTaxIDs = ['0009', '0010', '0014', '0015'].map(id => normalizeId(id));
-                if (no4thQtrTaxIDs.includes(normalizedTaxID) && monthIdx === fyMonth) {
+                if (no4thQtrTaxIDs.has(normalizedTaxID) && monthIdx === fyMonth) {
                     return null;
                 }
             } else if (frequency === 'Annual') {
@@ -467,7 +555,7 @@ const Engagements: React.FC = () => {
 
             const dueInfo = computeActualDueDate(currentMonth, currentYear, d.dueDate, isCalendarOnly ? '12/31' : (client?.fiscalYearEnd || '12/31'));
             const periodKey = `${String(monthIdx).padStart(2, '0')}/${currentYear}`;
-            const match = retainerLogs.find(l => normalizeId(l[0]) === normalizeId(d.deadlineID) && l[1] === periodKey);
+            const match = lookupMaps.retainerLogByDeadlinePeriod.get(`${normalizeId(d.deadlineID)}|${periodKey}`);
 
             return {
                 id: d.deadlineID,
@@ -506,9 +594,6 @@ const Engagements: React.FC = () => {
                 taxID: d.taxID
             };
         }).filter(Boolean).filter(d => {
-            // Search
-            if (searchQuery && !d!.clientName.toLowerCase().includes(searchQuery.toLowerCase()) && !d!.complianceName.toLowerCase().includes(searchQuery.toLowerCase())) return false;
-
             // Client Filter
             if (retainerFilter.client !== 'All' && d!.clientName !== retainerFilter.client) return false;
 
@@ -517,99 +602,49 @@ const Engagements: React.FC = () => {
                 if (d!.complianceCode !== retainerFilter.compliance) return false;
             }
 
+            if (retainerFilter.status !== 'All' && d!.status !== retainerFilter.status) return false;
+
             return true;
         }) as any[];
 
         const filtered = instances.filter(d => {
             // Role Based Visibility
-            if (user?.role === UserRole.STAFF) {
-                // Staff can only see their own
-                return d!.assignedStaff === user.firstName || d!.assignedStaff === `${user.firstName} ${user.lastName}`;
-            } else if (user?.role === UserRole.SENIOR) {
-                // Seniors see their own + their team members
-                const staff = allUsers.find(u => u.firstName === d!.assignedStaff || `${u.firstName} ${u.lastName}` === d!.assignedStaff);
-                const isOwn = d!.assignedStaff === user.firstName || d!.assignedStaff === `${user.firstName} ${user.lastName}`;
-                return isOwn || (staff?.team === user.team);
-            }
-            return true;
+            return isAssignedVisible(d!.assignedStaff);
         }).sort((a, b) => {
+            const statusRank: Record<string, number> = { LATE: 0, Pending: 1, Filed: 2 };
+            const statusDiff = (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9);
+            if (statusDiff !== 0) return statusDiff;
             return a.actualDueDate.getTime() - b.actualDueDate.getTime();
         });
 
         return filtered;
-    }, [context?.deadlines, context?.taxCompliances, retainers, clients, retainerFilter, searchQuery, user, allUsers, retainerLogs]);
+    }, [activeTab, context?.deadlines, retainerFilter, lookupMaps, calendarOnlyTaxIDs, no4thQtrTaxIDs, isAssignedVisible]);
+
+    const retainerInstances = useMemo(() => {
+        const search = retainerSearchQuery.trim().toLowerCase();
+        if (!search) return retainerAvailableInstances;
+
+        return retainerAvailableInstances.filter(inst =>
+            inst.clientName.toLowerCase().includes(search) ||
+            inst.complianceName.toLowerCase().includes(search) ||
+            String(inst.assignedStaff || '').toLowerCase().includes(search)
+        );
+    }, [retainerAvailableInstances, retainerSearchQuery]);
 
     // Dynamic Filter Options based on Role and Time
-    const availableRetainerClients = useMemo(() => {
-        const deadlines = context?.deadlines || [];
-        const currentMonth = retainerFilter.month;
-        const currentYear = retainerFilter.year;
-
-        return Array.from(new Set(
-            deadlines.map(d => {
-                const retainer = retainers.find(r => normalizeId(r.id) === normalizeId(d.retainerID));
-                if (!retainer) return null;
-
-                // Role-based visibility check
-                if (user?.role === UserRole.STAFF) {
-                    if (retainer.assignedStaff !== user.firstName && retainer.assignedStaff !== `${user.firstName} ${user.lastName}`) return null;
-                } else if (user?.role === UserRole.SENIOR) {
-                    const staff = allUsers.find(u => u.firstName === retainer.assignedStaff || `${u.firstName} ${u.lastName}` === retainer.assignedStaff);
-                    const isOwn = retainer.assignedStaff === user.firstName || retainer.assignedStaff === `${user.firstName} ${user.lastName}`;
-                    if (!isOwn && staff?.team !== user.team) return null;
-                }
-
-                const client = clients.find(c => normalizeId(c.id) === normalizeId(retainer.clientId));
-                if (!client) return null;
-
-                // Frequency Check
-                const frequency = d.dueDate.startsWith('M') ? 'Monthly' :
-                    d.dueDate.startsWith('Q') ? 'Quarterly' :
-                        (d.dueDate.startsWith('Y') || d.dueDate.startsWith('A')) ? 'Annual' : 'Monthly';
-
-                const calendarOnlyTaxIDs = ['0007', '0008', '0012', '0013', '0016', '0017', '0018', '0019', '0020', '0021', '0022'].map(id => normalizeId(id));
-                const isCalendarOnly = calendarOnlyTaxIDs.includes(normalizeId(d.taxID));
-                const fyMonth = isCalendarOnly ? 12 : (client?.fiscalYearEnd ? parseInt(client.fiscalYearEnd.split('/')[0]) : 12);
-                const monthIdx = months.indexOf(currentMonth) + 1;
-                const normalizedTaxID = normalizeId(d.taxID);
-
-                // Special Rule: 0619E (0001) and 0619F (0002) have no March, June, September, and December
-                if (['1', '2'].includes(normalizedTaxID)) {
-                    if ([3, 6, 9, 12].includes(monthIdx)) return null;
-                }
-
-                if (frequency === 'Quarterly') {
-                    const diff = (monthIdx - fyMonth + 12) % 3;
-                    if (diff !== 0) return null;
-                } else if (frequency === 'Annual') {
-                    if (monthIdx !== fyMonth) return null;
-                }
-
-                return client.name;
-            }).filter(Boolean)
-        )).sort();
-    }, [context?.deadlines, retainers, clients, retainerFilter.month, retainerFilter.year, user, allUsers]);
-
     const availableRetainerCompliances = useMemo(() => {
+        if (activeTab !== 'Retainer') return [];
         const deadlines = context?.deadlines || [];
         const currentMonth = retainerFilter.month;
-        const currentYear = retainerFilter.year;
 
         return Array.from(new Set(
             deadlines.map(d => {
-                const retainer = retainers.find(r => normalizeId(r.id) === normalizeId(d.retainerID));
+                const retainer = lookupMaps.retainerById.get(normalizeId(d.retainerID));
                 if (!retainer) return null;
 
-                // Role-based visibility
-                if (user?.role === UserRole.STAFF) {
-                    if (retainer.assignedStaff !== user.firstName && retainer.assignedStaff !== `${user.firstName} ${user.lastName}`) return null;
-                } else if (user?.role === UserRole.SENIOR) {
-                    const staff = allUsers.find(u => u.firstName === retainer.assignedStaff || `${u.firstName} ${u.lastName}` === retainer.assignedStaff);
-                    const isOwn = retainer.assignedStaff === user.firstName || retainer.assignedStaff === `${user.firstName} ${user.lastName}`;
-                    if (!isOwn && staff?.team !== user.team) return null;
-                }
+                if (!isAssignedVisible(retainer.assignedStaff)) return null;
 
-                const client = clients.find(c => normalizeId(c.id) === normalizeId(retainer.clientId));
+                const client = lookupMaps.clientById.get(normalizeId(retainer.clientId));
                 if (!client || client.status === 'Inactive') return null;
                 if (retainerFilter.client !== 'All' && client?.name !== retainerFilter.client) return null;
 
@@ -618,8 +653,7 @@ const Engagements: React.FC = () => {
                     d.dueDate.startsWith('Q') ? 'Quarterly' :
                         (d.dueDate.startsWith('Y') || d.dueDate.startsWith('A')) ? 'Annual' : 'Monthly';
 
-                const calendarOnlyTaxIDs = ['0007', '0008', '0012', '0013', '0016', '0017', '0018', '0019', '0020', '0021', '0022'].map(id => normalizeId(id));
-                const isCalendarOnly = calendarOnlyTaxIDs.includes(normalizeId(d.taxID));
+                const isCalendarOnly = calendarOnlyTaxIDs.has(normalizeId(d.taxID));
                 const fyMonth = isCalendarOnly ? 12 : (client?.fiscalYearEnd ? parseInt(client.fiscalYearEnd.split('/')[0]) : 12);
                 const monthIdx = months.indexOf(currentMonth) + 1;
                 const normalizedTaxID = normalizeId(d.taxID);
@@ -636,109 +670,69 @@ const Engagements: React.FC = () => {
                     if (monthIdx !== fyMonth) return null;
                 }
 
-                const compliance = d.taxID ? context?.taxCompliances?.find(tc => tc.taxID === d.taxID) : null;
-                const service = !d.taxID ? context?.services?.find(s => normalizeId(s.id) === normalizeId(d.serviceID)) : null;
+                const compliance = d.taxID ? lookupMaps.taxById.get(normalizeId(d.taxID)) : null;
+                const service = !d.taxID ? lookupMaps.serviceById.get(normalizeId(d.serviceID)) : null;
                 return compliance?.complianceCode || service?.name || d.serviceID;
             }).filter(Boolean)
         )).sort();
-    }, [context?.deadlines, context?.taxCompliances, retainers, clients, retainerFilter.month, retainerFilter.year, retainerFilter.client, user, allUsers]);
+    }, [activeTab, context?.deadlines, lookupMaps, retainerFilter.month, retainerFilter.client, isAssignedVisible, calendarOnlyTaxIDs]);
 
     // --- Tab 2: Special Engagements Logic ---
     // Dynamic Filter Options for Specials
-    const availableSpecialClients = useMemo(() => {
-        return Array.from(new Set(
-            specials.map(s => {
-                const client = clients.find(c => normalizeId(c.id) === normalizeId(s.clientId));
-                if (!client || client.status === 'Inactive') return null;
-
-                // Role Based Visibility
-                if (!isManagerOrAbove) {
-                    if (user?.role === UserRole.SENIOR) {
-                        const staff = allUsers.find(u => u.id === s.assignedStaff || `${u.firstName} ${u.lastName}` === s.assignedStaff);
-                        if (staff?.team !== user.team && s.assignedStaff !== user.firstName && s.assignedStaff !== `${user.firstName} ${user.lastName}`) return null;
-                    } else {
-                        // Staff
-                        if (s.assignedStaff !== user?.firstName && s.assignedStaff !== `${user?.firstName} ${user?.lastName}`) return null;
-                    }
-                }
-
-                // Cross-filter: Only show clients for the selected staff
-                if (specialFilter.staff !== 'All' && s.assignedStaff !== specialFilter.staff) return null;
-
-                return client?.name;
-            }).filter(Boolean)
-        )).sort();
-    }, [specials, clients, user, isManagerOrAbove, allUsers, specialFilter.staff]);
-
     const availableSpecialStaff = useMemo(() => {
+        if (activeTab !== 'Special') return [];
+        const activeStaffNames = new Set(allUsers
+            .filter(u => u.status === 'Active')
+            .map(u => `${u.firstName} ${u.lastName}`));
         return Array.from(new Set(
             specials.map(s => {
-                const client = clients.find(c => normalizeId(c.id) === normalizeId(s.clientId));
+                const client = lookupMaps.clientById.get(normalizeId(s.clientId));
                 if (!client || client.status === 'Inactive') return null;
 
                 // Role Based Visibility
-                if (!isManagerOrAbove) {
-                    if (user?.role === UserRole.SENIOR) {
-                        const staff = allUsers.find(u => u.id === s.assignedStaff || `${u.firstName} ${u.lastName}` === s.assignedStaff);
-                        if (staff?.team !== user.team && s.assignedStaff !== user.firstName && s.assignedStaff !== `${user.firstName} ${user.lastName}`) return null;
-                    } else {
-                        // Staff
-                        if (s.assignedStaff !== user?.firstName && s.assignedStaff !== `${user?.firstName} ${user?.lastName}`) return null;
-                    }
-                }
-
-                // Cross-filter: Only show staff for the selected client
-                if (specialFilter.client !== 'All' && client?.name !== specialFilter.client) return null;
+                if (!isAssignedVisible(s.assignedStaff)) return null;
+                if (!activeStaffNames.has(s.assignedStaff)) return null;
 
                 return s.assignedStaff;
             }).filter(Boolean)
         )).sort();
-    }, [specials, clients, user, isManagerOrAbove, allUsers, specialFilter.client]);
+    }, [activeTab, specials, lookupMaps.clientById, isAssignedVisible, allUsers]);
 
-    const specialInstances = useMemo(() => {
+    const specialAvailableInstances = useMemo(() => {
+        if (activeTab !== 'Special') return [];
         return specials.map(s => {
-            const client = clients.find(c => normalizeId(c.id) === normalizeId(s.clientId));
+            const client = lookupMaps.clientById.get(normalizeId(s.clientId));
             if (!client || client.status === 'Inactive') return null;
+
+            let displayStatus = s.status;
+            if (s.status !== 'Completed' && s.endDate) {
+                try {
+                    const [m, d, y] = s.endDate.split('/');
+                    const endDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+                    endDate.setHours(23, 59, 59, 999);
+                    if (new Date() > endDate) displayStatus = 'Overdue';
+                } catch (e) {}
+            }
 
             return {
                 ...s,
                 clientName: client?.name || 'Unknown Client',
                 engagementName: s.projectTitle || s.serviceName || s.serviceType,
+                displayStatus,
                 priority: s.priority || 'Medium' // Defaulting for now
             };
         }).filter(Boolean).filter(s => {
             if (!s) return false;
             // Role Based Visibility (Keep this for the actual list)
-            if (!isManagerOrAbove) {
-                if (user?.role === UserRole.SENIOR) {
-                    const staff = allUsers.find(u => u.id === s.assignedStaff || `${u.firstName} ${u.lastName}` === s.assignedStaff);
-                    if (staff?.team !== user.team && s.assignedStaff !== user.firstName && s.assignedStaff !== `${user.firstName} ${user.lastName}`) return false;
-                } else {
-                    // Staff
-                    if (s.assignedStaff !== user?.firstName && s.assignedStaff !== `${user?.firstName} ${user?.lastName}`) return false;
-                }
-            }
-
-            // Search
-            if (searchQuery && !s.clientName.toLowerCase().includes(searchQuery.toLowerCase()) && !s.engagementName.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+            if (!isAssignedVisible(s.assignedStaff)) return false;
 
             // Filters
-            if (specialFilter.client !== 'All' && s.clientName !== specialFilter.client) return false;
             if (specialFilter.staff !== 'All' && s.assignedStaff !== specialFilter.staff) return false;
             if (specialFilter.priority !== 'All' && s.priority !== specialFilter.priority) return false;
 
             // Status filter uses computed display status (accounts for Overdue)
             if (specialFilter.status !== 'All') {
-                let displayStatus = s.status;
-                if (s.status !== 'Completed' && s.endDate) {
-                    try {
-                        const [m, d, y] = s.endDate.split('/');
-                        const endDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
-                        endDate.setHours(23, 59, 59, 999);
-                        if (new Date() > endDate) displayStatus = 'Overdue';
-                    } catch (e) {}
-                }
-                if (displayStatus !== specialFilter.status) return false;
+                if (s.displayStatus !== specialFilter.status) return false;
             }
 
             return true;
@@ -747,7 +741,67 @@ const Engagements: React.FC = () => {
             const dateB = new Date(b.endDate || 0);
             return dateA.getTime() - dateB.getTime();
         });
-    }, [specials, clients, specialFilter, searchQuery, user, isManagerOrAbove, allUsers]);
+    }, [activeTab, specials, lookupMaps.clientById, specialFilter, isAssignedVisible]);
+
+    const specialInstances = useMemo(() => {
+        const search = specialSearchQuery.trim().toLowerCase();
+        if (!search) return specialAvailableInstances;
+
+        return specialAvailableInstances.filter(inst =>
+            inst.clientName.toLowerCase().includes(search) ||
+            inst.engagementName.toLowerCase().includes(search) ||
+            String(inst.assignedStaff || '').toLowerCase().includes(search)
+        );
+    }, [specialAvailableInstances, specialSearchQuery]);
+
+    useEffect(() => {
+        setRetainerPage(1);
+    }, [retainerFilter, retainerSearchQuery, retainerGroupBy]);
+
+    useEffect(() => {
+        setSpecialPage(1);
+    }, [specialFilter, specialSearchQuery, specialGroupBy]);
+
+    const paginatedRetainerInstances = useMemo(() => {
+        if (retainerGroupBy !== 'None') return retainerInstances;
+        const start = (retainerPage - 1) * pageSize;
+        return retainerInstances.slice(start, start + pageSize);
+    }, [retainerInstances, retainerPage, retainerGroupBy]);
+
+    const paginatedSpecialInstances = useMemo(() => {
+        if (specialGroupBy !== 'None') return specialInstances;
+        const start = (specialPage - 1) * pageSize;
+        return specialInstances.slice(start, start + pageSize);
+    }, [specialInstances, specialPage, specialGroupBy]);
+
+    const retainerSummary = useMemo(() => {
+        const staffNames = new Set<string>();
+        const summary = retainerAvailableInstances.reduce((acc, inst) => {
+            acc.total += 1;
+            if (inst.status === 'LATE') acc.late += 1;
+            else if (inst.status === 'Filed') acc.filed += 1;
+            else acc.pending += 1;
+            if (inst.assignedStaff) staffNames.add(inst.assignedStaff);
+            return acc;
+        }, { total: 0, late: 0, pending: 0, filed: 0 });
+
+        return { ...summary, staffCount: staffNames.size };
+    }, [retainerAvailableInstances]);
+
+    const specialSummary = useMemo(() => {
+        const summary = specialAvailableInstances.reduce((acc, inst) => {
+            acc.total += 1;
+            if (inst.displayStatus === 'Overdue') acc.overdue += 1;
+            else if (inst.displayStatus === 'Completed') acc.completed += 1;
+            else if (inst.displayStatus === 'Blocked') acc.blocked += 1;
+            else if (inst.displayStatus === 'In Progress') acc.inProgress += 1;
+            else acc.planning += 1;
+            return acc;
+        }, { total: 0, planning: 0, inProgress: 0, completed: 0, blocked: 0, overdue: 0 });
+
+        return summary;
+    }, [specialAvailableInstances]);
+
     const auditTrail = useMemo(() => {
         if (activeTab !== 'Retainer' || !selectedItem || !selectedItem.frequency) return [];
 
@@ -823,48 +877,41 @@ const Engagements: React.FC = () => {
                 <div className="space-y-0.5">
                     <div className="flex items-center gap-2.5">
                         <div className="w-1.5 h-7 bg-primary rounded-full" />
-                        <h1 className="text-3xl font-black text-neutral-dark dark:text-white tracking-tight">Engagement Monitoring</h1>
+                        <h1 className="text-3xl font-black text-neutral-dark dark:text-white tracking-tight">
+                            {activeTab === 'Retainer' ? 'Retainer Monitoring' : 'Special Projects'}
+                        </h1>
                     </div>
-                    <p className="text-sm text-secondary dark:text-gray-300 font-medium pl-4 opacity-70 dark:opacity-100">Strategic tracking of active engagements and regulatory deadlines</p>
-                </div>
-
-                {/* Enhanced Navigation Tabs */}
-                <div className="flex p-1 bg-neutral-light dark:bg-gray-900 rounded-xl shrink-0 border border-neutral-medium dark:border-gray-700">
-                    <button
-                        onClick={() => setActiveTab('Retainer')}
-                        className={`flex items-center gap-2.5 px-6 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 ${activeTab === 'Retainer'
-                                ? 'bg-white dark:bg-gray-700 text-primary shadow-lg ring-1 ring-black/[0.03]'
-                                : 'text-secondary hover:text-neutral-dark dark:hover:text-white hover:bg-black/5'
-                            }`}
-                    >
-                        <FileText size={16} />
-                        Retainers
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('Special')}
-                        className={`flex items-center gap-2.5 px-6 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 ${activeTab === 'Special'
-                                ? 'bg-white dark:bg-gray-700 text-primary shadow-lg ring-1 ring-black/[0.03]'
-                                : 'text-secondary hover:text-neutral-dark dark:hover:text-white hover:bg-black/5'
-                            }`}
-                    >
-                        <Briefcase size={16} />
-                        Specials
-                    </button>
+                    <p className="text-sm text-secondary dark:text-gray-300 font-medium pl-4 opacity-70 dark:opacity-100">
+                        {activeTab === 'Retainer'
+                            ? 'Recurring compliance work and regulatory deadlines'
+                            : 'One-time project engagements and progress tracking'}
+                    </p>
                 </div>
             </div>
 
+            {activeTab === 'Retainer' && retainerAvailableInstances.length > 0 && (
+                <div className="-mt-1">
+                    <RetainerSummaryStrip summary={retainerSummary} />
+                </div>
+            )}
+            {activeTab === 'Special' && specialAvailableInstances.length > 0 && (
+                <div className="-mt-1">
+                    <SpecialSummaryStrip summary={specialSummary} />
+                </div>
+            )}
+
             {/* Modern Streamlined Toolbar */}
-            <div className="bg-white dark:bg-gray-800 p-1.5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5">
-                <div className="flex flex-col 2xl:flex-row 2xl:items-center gap-1.5">
+            <div className="bg-white dark:bg-gray-800 p-1 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5">
+                <div className="flex flex-col 2xl:flex-row 2xl:items-center gap-1">
                     {/* Integrated Search - Flexible based on resolution */}
                     <div className="relative group w-full 2xl:flex-1 2xl:min-w-[400px]">
                         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-secondary/40 dark:text-gray-400/60 group-focus-within:text-primary transition-colors" size={16} />
                         <input
                             type="text"
                             placeholder="Search engagements, clients, or staff..."
-                            className="w-full pl-10 pr-4 py-2 bg-neutral-light/50 dark:bg-gray-900/50 border border-transparent focus:border-primary/20 rounded-xl text-[13px] font-medium text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all placeholder:text-secondary/30 dark:placeholder:text-gray-500"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full pl-10 pr-4 py-1.5 bg-neutral-light/50 dark:bg-gray-900/50 border border-transparent focus:border-primary/20 rounded-xl text-[13px] font-medium text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all placeholder:text-secondary/30 dark:placeholder:text-gray-500"
+                            value={activeTab === 'Retainer' ? retainerSearchQuery : specialSearchQuery}
+                            onChange={(e) => activeTab === 'Retainer' ? setRetainerSearchQuery(e.target.value) : setSpecialSearchQuery(e.target.value)}
                         />
                     </div>
 
@@ -872,16 +919,6 @@ const Engagements: React.FC = () => {
                     <div className="flex flex-nowrap items-center gap-2 px-0.5 overflow-x-auto no-scrollbar">
                         {activeTab === 'Retainer' ? (
                             <>
-                                <select
-                                    value={retainerFilter.client}
-                                    onChange={(e) => setRetainerFilter(prev => ({ ...prev, client: e.target.value }))}
-                                    className="pl-2 pr-7 py-1.5 bg-neutral-light/50 dark:bg-gray-900 border border-transparent hover:border-neutral-medium/50 rounded-lg text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer w-[260px]"
-                                    style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%236b7280\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'%3E%3C/path%3E%3C/svg%3E")', backgroundPosition: 'right 0.4rem center', backgroundRepeat: 'no-repeat', backgroundSize: '0.9rem' }}
-                                >
-                                    <option value="All">All Clients</option>
-                                    {availableRetainerClients.map(name => <option key={name} value={name}>{name}</option>)}
-                                </select>
-
                                 <select
                                     value={retainerFilter.compliance}
                                     onChange={(e) => setRetainerFilter(prev => ({ ...prev, compliance: e.target.value }))}
@@ -909,19 +946,14 @@ const Engagements: React.FC = () => {
                                         {years.map(y => <option key={y} value={y}>{y}</option>)}
                                     </select>
                                 </div>
+
+                                <RetainerStatusChips
+                                    value={retainerFilter.status}
+                                    onChange={(status) => setRetainerFilter(prev => ({ ...prev, status }))}
+                                />
                             </>
                         ) : (
                             <>
-                                <select
-                                    value={specialFilter.client}
-                                    onChange={(e) => setSpecialFilter(prev => ({ ...prev, client: e.target.value }))}
-                                    className="pl-2 pr-7 py-1.5 bg-neutral-light/50 dark:bg-gray-900 border border-transparent hover:border-neutral-medium/50 rounded-lg text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer w-[260px]"
-                                    style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%236b7280\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'%3E%3C/path%3E%3C/svg%3E")', backgroundPosition: 'right 0.4rem center', backgroundRepeat: 'no-repeat', backgroundSize: '0.9rem' }}
-                                >
-                                    <option value="All">All Clients</option>
-                                    {availableSpecialClients.map(name => <option key={name} value={name}>{name}</option>)}
-                                </select>
-
                                 <select
                                     value={specialFilter.staff}
                                     onChange={(e) => setSpecialFilter(prev => ({ ...prev, staff: e.target.value }))}
@@ -932,73 +964,91 @@ const Engagements: React.FC = () => {
                                     {availableSpecialStaff.map(staff => <option key={staff} value={staff}>{staff}</option>)}
                                 </select>
 
-                                <select
+                                <SpecialStatusChips
                                     value={specialFilter.status}
-                                    onChange={(e) => setSpecialFilter(prev => ({ ...prev, status: e.target.value }))}
-                                    className="pl-2 pr-7 py-1.5 bg-neutral-light/50 dark:bg-gray-900 border border-transparent hover:border-neutral-medium/50 rounded-lg text-[11px] font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all appearance-none cursor-pointer w-[180px]"
-                                    style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%236b7280\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'%3E%3C/path%3E%3C/svg%3E")', backgroundPosition: 'right 0.4rem center', backgroundRepeat: 'no-repeat', backgroundSize: '0.9rem' }}
-                                >
-                                    <option value="All">All Status</option>
-                                    <option value="Planning">Planning</option>
-                                    <option value="In Progress">In Progress</option>
-                                    <option value="Completed">Completed</option>
-                                    <option value="Blocked">Blocked</option>
-                                    <option value="Overdue">Overdue</option>
-                                </select>
+                                    onChange={(status) => setSpecialFilter(prev => ({ ...prev, status }))}
+                                />
                             </>
                         )}
 
 
-                        <GroupBySelect
-                            value={groupBy}
-                            onChange={setGroupBy}
-                            activeTab={activeTab}
-                            userRole={user?.role}
-                        />
+                        {activeTab === 'Retainer' ? (
+                            <RetainerGroupChips
+                                value={retainerGroupBy}
+                                onChange={setRetainerGroupBy}
+                                userRole={user?.role}
+                            />
+                        ) : (
+                            <SpecialGroupChips
+                                value={specialGroupBy}
+                                onChange={setSpecialGroupBy}
+                                userRole={user?.role}
+                            />
+                        )}
                     </div>
                 </div>
             </div>
 
             {/* Ultra-Compact Content Area */}
-            <div className="min-h-[500px]">
+            <div
+                key={`${activeTab}-${activeTab === 'Retainer' ? retainerSearchQuery : specialSearchQuery}-${activeTab === 'Retainer' ? retainerGroupBy : specialGroupBy}-${activeTab === 'Retainer' ? retainerInstances.length : specialInstances.length}`}
+                className="transition-all duration-500 min-h-[500px] animate-in fade-in zoom-in-95 duration-500 ease-out"
+            >
                 {activeTab === 'Retainer' ? (
                     retainerInstances.length === 0 ? (
                         <EmptyState
-                            key={`retainer-empty-${searchQuery}`}
+                            key={`retainer-empty-${retainerSearchQuery}`}
                             icon={FileText}
                             title="No retainers found"
-                            query={searchQuery}
+                            query={retainerSearchQuery}
                             defaultMessage="No engagements found matching your current view."
                         />
                     ) : (
                         <RetainerTable
-                            instances={retainerInstances}
+                            instances={paginatedRetainerInstances}
                             user={user}
                             onSelect={(inst) => { setSelectedItem(inst); setIsDetailOpen(true); }}
                             allUsers={allUsers}
-                            groupBy={groupBy}
+                            groupBy={retainerGroupBy}
                         />
                     )
                 ) : (
                     specialInstances.length === 0 ? (
                         <EmptyState
-                            key={`special-empty-${searchQuery}`}
+                            key={`special-empty-${specialSearchQuery}`}
                             icon={Briefcase}
                             title="No specials found"
-                            query={searchQuery}
+                            query={specialSearchQuery}
                             defaultMessage="No special projects found matching your current view."
                         />
                     ) : (
                         <SpecialTable
-                            instances={specialInstances}
+                            instances={paginatedSpecialInstances}
                             user={user}
                             onSelect={(inst) => { setSelectedItem(inst); setIsDetailOpen(true); }}
                             allUsers={allUsers}
-                            groupBy={groupBy}
+                            groupBy={specialGroupBy}
                         />
                     )
                 )}
             </div>
+
+            {activeTab === 'Retainer' && retainerGroupBy === 'None' && retainerInstances.length > pageSize && (
+                <PaginationControls
+                    page={retainerPage}
+                    pageSize={pageSize}
+                    total={retainerInstances.length}
+                    onPageChange={setRetainerPage}
+                />
+            )}
+            {activeTab === 'Special' && specialGroupBy === 'None' && specialInstances.length > pageSize && (
+                <PaginationControls
+                    page={specialPage}
+                    pageSize={pageSize}
+                    total={specialInstances.length}
+                    onPageChange={setSpecialPage}
+                />
+            )}
 
             {/* Engagement Detail Drawer */}
             {isDetailOpen && selectedItem && createPortal(
@@ -1006,16 +1056,31 @@ const Engagements: React.FC = () => {
                     <div className="absolute inset-0 bg-neutral-dark/40 backdrop-blur-sm transition-opacity" onClick={() => { setIsDetailOpen(false); setIsEditingDate(false); }} />
                     <div className="absolute inset-y-0 right-0 max-w-2xl w-full bg-white dark:bg-gray-900 shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
                         {/* Drawer Header */}
-                        <div className="p-6 border-b border-neutral-medium dark:border-gray-800 flex items-center justify-between bg-neutral-light/30 dark:bg-gray-800/30">
-                            <div>
-                                <div className="flex items-center gap-2 mb-1">
+                        <div className="p-5 border-b border-neutral-medium dark:border-gray-800 flex items-start justify-between gap-4 bg-neutral-light/30 dark:bg-gray-800/30">
+                            <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2 mb-1.5">
                                     <span className="bg-rose-50 text-rose-600 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider">
                                         {activeTab === 'Retainer' ? 'Retainer Engagement' : 'Special Project'}
                                     </span>
+                                    {activeTab === 'Retainer' && (
+                                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border ${selectedItem.status === 'Filed' ? 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' :
+                                                selectedItem.status === 'LATE' ? 'bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20' :
+                                                    'bg-amber-50 text-amber-600 border-amber-100 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'
+                                            }`}>
+                                            {selectedItem.status}
+                                        </span>
+                                    )}
                                 </div>
-                                <h2 className="text-xl font-black text-neutral-dark dark:text-white">
+                                <h2 className="text-xl font-black text-neutral-dark dark:text-white leading-tight">
                                     {activeTab === 'Retainer' ? selectedItem.complianceName : selectedItem.engagementName}
                                 </h2>
+                                {activeTab === 'Retainer' && (
+                                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-bold text-secondary dark:text-gray-400">
+                                        <span>{selectedItem.clientName}</span>
+                                        <span className="hidden sm:inline text-secondary/30">|</span>
+                                        <span>Due {selectedItem.dueDate}</span>
+                                    </div>
+                                )}
                             </div>
                             <button
                                 onClick={() => setIsDetailOpen(false)}
@@ -1035,191 +1100,178 @@ const Engagements: React.FC = () => {
                                     : specialInstances.find(i => i.id === selectedItem.id);
 
                                 if (!currentItem) return null;
+                                const completedTaskCount = worklogTasks.filter(task => task.status === 'Completed').length;
+                                const pendingTaskCount = Math.max(worklogTasks.length - completedTaskCount, 0);
 
                                 return activeTab === 'Retainer' ? (
-                                    <section className="space-y-8 animate-in fade-in slide-in-from-top duration-500">
-                                        {/* Client Summary - Retainer Specific - Modernized */}
-                                        <div className="bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 p-6 relative overflow-hidden group">
-                                            <div className="absolute -top-24 -right-24 w-48 h-48 bg-primary/5 rounded-full blur-3xl transition-all group-hover:bg-primary/10" />
-
-                                            <h3 className="text-[10px] font-black text-primary uppercase tracking-[0.2em] mb-4 relative z-10 opacity-70">Client Information</h3>
-                                            <div className="grid grid-cols-2 gap-8 relative z-10">
-                                                <div>
-                                                    <p className="text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-wider mb-1.5 opacity-60 dark:opacity-100">Client Name</p>
-                                                    <p className="text-base font-black text-neutral-dark dark:text-white leading-tight tracking-tight">{selectedItem.clientName}</p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-wider mb-1.5 opacity-60 dark:opacity-100">Assigned Staff</p>
-                                                    <StaffAvatar staffName={selectedItem.assignedStaff} allUsers={allUsers} />
-                                                </div>
-                                            </div>
-                                        </div>
-
+                                    <section className="space-y-5 animate-in fade-in slide-in-from-top duration-500">
                                         <div className="space-y-4">
-                                            <div className="flex items-center justify-between">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-1 h-4 bg-primary rounded-full" />
-                                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">Compliance Instance</h3>
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <div className="w-1 h-4 bg-primary rounded-full shrink-0" />
+                                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white truncate">Compliance Details</h3>
                                                 </div>
-                                                <div className={`px-4 py-1 rounded-xl text-[10px] font-black uppercase tracking-[0.15em] shadow-sm ${currentItem.status === 'Filed' ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20' :
-                                                        currentItem.status === 'LATE' ? 'bg-rose-500/10 text-rose-600 border border-rose-500/20' :
-                                                            'bg-amber-500/10 text-amber-600 border border-amber-500/20'
-                                                    }`}>
-                                                    {currentItem.status}
-                                                </div>
+                                                {(currentItem.status === 'Filed' || currentItem.status === 'LATE') && !isEditingDate && (
+                                                    <button
+                                                        onClick={() => {
+                                                            setIsEditingDate(true);
+                                                            if (currentItem.dateFiled) {
+                                                                const [m, d, y] = currentItem.dateFiled.split('/');
+                                                                setCompletionDate(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`);
+                                                            }
+                                                        }}
+                                                        className="px-3 py-1 rounded-lg bg-primary/10 text-primary text-[10px] font-black hover:bg-primary hover:text-white transition-colors"
+                                                    >
+                                                        Edit filing
+                                                    </button>
+                                                )}
                                             </div>
 
-                                            <div className="grid grid-cols-3 gap-4">
-                                                <div className="p-4 bg-white/60 dark:bg-gray-800/40 backdrop-blur-sm rounded-2xl border border-white/50 dark:border-gray-700 shadow-lg shadow-primary/5">
-                                                    <p className="text-[9px] font-black text-primary uppercase mb-2 opacity-70">Tax Period</p>
-                                                    <p className="text-sm font-black text-neutral-dark dark:text-white leading-none">{currentItem.taxPeriod}</p>
-                                                </div>
-                                                <div className="p-4 bg-white/60 dark:bg-gray-800/40 backdrop-blur-sm rounded-2xl border border-white/50 dark:border-gray-700 shadow-lg shadow-primary/5">
-                                                    <p className="text-[9px] font-black text-primary uppercase mb-2 opacity-70">Deadline</p>
-                                                    <p className="text-sm font-black text-neutral-dark dark:text-white leading-none">{currentItem.dueDate}</p>
-                                                </div>
-                                                <div className="p-4 bg-white/60 dark:bg-gray-800/40 backdrop-blur-sm rounded-2xl border border-white/50 dark:border-gray-700 shadow-lg shadow-primary/5">
-                                                    <div className="flex justify-between items-center mb-2">
-                                                        <p className="text-[9px] font-black text-primary uppercase opacity-70">Completed</p>
-                                                        {(currentItem.status === 'Filed' || currentItem.status === 'LATE') && !isEditingDate && (
-                                                            <button
-                                                                onClick={() => {
-                                                                    setIsEditingDate(true);
-                                                                    if (currentItem.dateFiled) {
-                                                                        const [m, d, y] = currentItem.dateFiled.split('/');
-                                                                        setCompletionDate(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`);
-                                                                    }
-                                                                }}
-                                                                className="text-[9px] font-black text-primary hover:underline uppercase tracking-widest"
-                                                            >
-                                                                Edit
-                                                            </button>
+                                            <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-5 space-y-5">
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
+                                                    <div>
+                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Client</p>
+                                                        <p className="text-sm font-black text-neutral-dark dark:text-white leading-tight">{currentItem.clientName}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Assigned Staff</p>
+                                                        <StaffAvatar staffName={currentItem.assignedStaff} allUsers={allUsers} />
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Tax Period</p>
+                                                        <p className="text-sm font-bold text-neutral-dark dark:text-white">{currentItem.taxPeriod}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Deadline</p>
+                                                        <div className="flex items-center gap-1.5">
+                                                            <Calendar size={13} className="text-secondary/50" />
+                                                            <p className="text-sm font-bold text-neutral-dark dark:text-white">{currentItem.dueDate}</p>
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Completed</p>
+                                                        {(currentItem.status === 'Filed' || currentItem.status === 'LATE') && !isEditingDate ? (
+                                                            <p className="text-sm font-black text-emerald-600">{currentItem.dateFiled}</p>
+                                                        ) : (
+                                                            <input
+                                                                type="date"
+                                                                value={completionDate}
+                                                                onChange={(e) => setCompletionDate(e.target.value)}
+                                                                className="w-full max-w-[180px] px-3 py-2 bg-neutral-light/60 dark:bg-gray-900 border border-neutral-medium/60 dark:border-gray-700 rounded-lg text-xs font-bold text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/20"
+                                                            />
                                                         )}
                                                     </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Status</p>
+                                                        <span className={`inline-flex px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${currentItem.status === 'Filed' ? 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' :
+                                                                currentItem.status === 'LATE' ? 'bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20' :
+                                                                    'bg-amber-50 text-amber-600 border-amber-100 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'
+                                                            }`}>
+                                                            {currentItem.status}
+                                                        </span>
+                                                    </div>
+                                                </div>
+
+                                                <div className="pt-5 border-t border-neutral-medium/50 dark:border-gray-700/70">
+                                                    <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-2">Filing Remarks</p>
                                                     {(currentItem.status === 'Filed' || currentItem.status === 'LATE') && !isEditingDate ? (
-                                                        <p className="text-sm font-black text-emerald-600 leading-none">{currentItem.dateFiled}</p>
+                                                        <p className="text-sm font-medium text-neutral-dark/80 dark:text-gray-300 italic">{currentItem.remarks || 'No remarks provided'}</p>
                                                     ) : (
-                                                        <input
-                                                            type="date"
-                                                            value={completionDate}
-                                                            onChange={(e) => setCompletionDate(e.target.value)}
-                                                            className="w-full text-sm font-black text-neutral-dark dark:text-white bg-transparent outline-none border-none p-0 focus:ring-0 cursor-pointer h-4"
+                                                        <textarea
+                                                            value={remarks}
+                                                            onChange={(e) => setRemarks(e.target.value)}
+                                                            placeholder="Add reasoning for late filing or extensions..."
+                                                            className="w-full min-h-[72px] px-3 py-2 bg-neutral-light/60 dark:bg-gray-900 border border-neutral-medium/60 dark:border-gray-700 rounded-xl text-sm font-medium text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/20 resize-none custom-scrollbar"
                                                         />
                                                     )}
                                                 </div>
                                             </div>
-
-                                            <div className="p-5 bg-white/60 dark:bg-gray-800/40 backdrop-blur-sm rounded-2xl border border-white/50 dark:border-gray-700 shadow-lg shadow-primary/5">
-                                                <p className="text-[9px] font-black text-primary uppercase mb-2 opacity-70">Filing Remarks</p>
-                                                {(currentItem.status === 'Filed' || currentItem.status === 'LATE') && !isEditingDate ? (
-                                                    <p className="text-xs font-bold text-neutral-dark dark:text-white italic opacity-80">{currentItem.remarks || 'No remarks provided'}</p>
-                                                ) : (
-                                                    <textarea
-                                                        value={remarks}
-                                                        onChange={(e) => setRemarks(e.target.value)}
-                                                        placeholder="Add reasoning for late filing or extensions..."
-                                                        className="w-full text-xs font-bold text-neutral-dark dark:text-white bg-transparent outline-none border-none p-0 focus:ring-0 resize-none min-h-[50px] custom-scrollbar"
-                                                    />
-                                                )}
-                                            </div>
                                         </div>
 
-                                        <div className="flex gap-4">
-                                            {currentItem.status === 'Pending' ? (
+                                        {(currentItem.status === 'Pending' || isEditingDate) && (
+                                            <div className="flex gap-3">
                                                 <button
                                                     disabled={isProcessing}
                                                     onClick={() => handleMarkAsFiled(currentItem.id)}
-                                                    className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-3 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] shadow-xl shadow-emerald-600/30 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50"
+                                                    className="flex-1 bg-primary hover:bg-primary-dark text-white py-3 rounded-xl font-black text-[11px] shadow-lg shadow-primary/20 active:scale-[0.98] transition-all disabled:opacity-50"
                                                 >
-                                                    {isProcessing ? 'Processing...' : 'Marked Filed & Completed'}
+                                                    {currentItem.status === 'Pending'
+                                                        ? (isProcessing ? 'Processing...' : 'Mark as Filed')
+                                                        : (isProcessing ? 'Updating...' : 'Update Filing')}
                                                 </button>
-                                            ) : (
-                                                isEditingDate && (
+                                                {isEditingDate && (
                                                     <button
-                                                        disabled={isProcessing}
-                                                        onClick={() => handleMarkAsFiled(currentItem.id)}
-                                                        className="flex-1 bg-gradient-to-r from-primary to-primary-dark text-white py-3 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] shadow-xl shadow-primary/30 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50"
+                                                        onClick={() => setIsEditingDate(false)}
+                                                        className="px-5 py-3 bg-white dark:bg-gray-800 rounded-xl font-black text-[11px] text-secondary border border-neutral-medium dark:border-gray-700 hover:bg-neutral-light dark:hover:bg-gray-700 transition-all"
                                                     >
-                                                        {isProcessing ? 'Updating...' : 'Update Completion Date'}
+                                                        Cancel
                                                     </button>
-                                                )
-                                            )}
-                                            {isEditingDate && (
-                                                <button
-                                                    onClick={() => setIsEditingDate(false)}
-                                                    className="px-8 py-3 bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] text-secondary border border-neutral-medium dark:border-gray-700 hover:bg-neutral-light transition-all"
-                                                >
-                                                    Cancel Edit
-                                                </button>
-                                            )}
-                                        </div>
-
-                                        {/* History/Log would go here */}
-                                        <div className="pt-6 border-t border-neutral-medium/50 dark:border-gray-800">
-                                            <div className="flex items-center gap-2 mb-4">
-                                                <div className="w-1 h-4 bg-primary rounded-full" />
-                                                <h4 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">Historical Audit Trail</h4>
+                                                )}
                                             </div>
-                                            <div className="space-y-3">
-                                                {auditTrail.map((entry) => (
-                                                    <div key={entry.cycle} className="flex items-center justify-between p-4 bg-white/40 dark:bg-gray-800/20 backdrop-blur-sm rounded-2xl border border-neutral-medium/30 dark:border-gray-700/50 hover:bg-white/60 hover:-translate-y-1 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 group cursor-default">
-                                                        <div className="flex items-center gap-3">
-                                                            <div className={`w-2 h-2 rounded-full shadow-lg ${
-                                                                entry.status === 'Filed' ? 'bg-emerald-500 shadow-emerald-500/50' : 
-                                                                entry.status === 'LATE' ? 'bg-rose-500 shadow-rose-500/50' : 
-                                                                'bg-amber-500 shadow-amber-500/50'}`} />
-                                                            <div className="flex flex-col">
-                                                                <span className="text-xs font-black text-neutral-dark dark:text-white tracking-tight">{entry.period}</span>
+                                        )}
+
+                                        <div className="space-y-4">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-1 h-4 bg-primary rounded-full" />
+                                                <h4 className="text-sm font-black text-neutral-dark dark:text-white">Historical Audit Trail</h4>
+                                            </div>
+                                            <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
+                                                {auditTrail.length === 0 ? (
+                                                    <div className="px-5 py-6 text-center text-xs font-bold text-secondary/60">No prior filing history found.</div>
+                                                ) : (
+                                                    auditTrail.map((entry) => (
+                                                        <div key={entry.cycle} className="flex items-center justify-between gap-4 px-5 py-3 border-b border-neutral-medium/40 dark:border-gray-700/60 last:border-0 hover:bg-neutral-light/50 dark:hover:bg-gray-800 transition-colors">
+                                                            <div className="flex items-center gap-3 min-w-0">
+                                                                <div className={`w-2 h-2 rounded-full shrink-0 ${
+                                                                    entry.status === 'Filed' ? 'bg-emerald-500' :
+                                                                    entry.status === 'LATE' ? 'bg-rose-500' :
+                                                                    'bg-amber-500'
+                                                                }`} />
+                                                                <div className="min-w-0">
+                                                                    <p className="text-xs font-black text-neutral-dark dark:text-white">{entry.period}</p>
+                                                                    {entry.dateFiled && (
+                                                                        <p className="text-[11px] font-bold text-secondary dark:text-gray-400">Filed {formatDisplayDate(entry.dateFiled)}</p>
+                                                                    )}
+                                                                </div>
                                                             </div>
-                                                        </div>
-                                                        <div className="flex flex-col items-end gap-1">
-                                                            <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-md ${
-                                                                entry.status === 'Filed' ? 'bg-emerald-500/10 text-emerald-600' : 
-                                                                entry.status === 'LATE' ? 'bg-rose-500/10 text-rose-600' : 
-                                                                'bg-amber-500/10 text-amber-600'}`}>
+                                                            <span className={`shrink-0 text-[9px] font-black px-2 py-1 rounded-full border ${
+                                                                entry.status === 'Filed' ? 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' :
+                                                                entry.status === 'LATE' ? 'bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20' :
+                                                                'bg-amber-50 text-amber-600 border-amber-100 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'
+                                                            }`}>
                                                                 {entry.status}
                                                             </span>
-                                                            {entry.dateFiled && (
-                                                                <span className="text-[10px] font-black text-secondary dark:text-gray-400 uppercase opacity-100">{formatDisplayDate(entry.dateFiled)}</span>
-                                                            )}
                                                         </div>
-                                                    </div>
-                                                ))}
+                                                    ))
+                                                )}
                                             </div>
                                         </div>
                                     </section>
                                 ) : (
-                                    <section className="space-y-8">
-                                        {/* Combined Project Information - Enhanced Glassmorphism */}
-                                        <div className="animate-in fade-in slide-in-from-top duration-500">
-                                            <div className="flex items-center gap-2 mb-4">
+                                    <section className="space-y-5 animate-in fade-in slide-in-from-top duration-500">
+                                        <div className="space-y-4">
+                                            <div className="flex items-center gap-2">
                                                 <div className="w-1 h-4 bg-primary rounded-full" />
-                                                <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">Project Information</h3>
+                                                <h3 className="text-sm font-black text-neutral-dark dark:text-white">Project Information</h3>
                                             </div>
-                                            <div className="bg-white/80 dark:bg-gray-800/60 backdrop-blur-md rounded-[2rem] border border-white dark:border-gray-700 shadow-2xl shadow-primary/5 p-6 space-y-5 relative overflow-hidden group">
-                                                {/* Decorative background glow */}
-                                                <div className="absolute -top-24 -right-24 w-48 h-48 bg-primary/10 rounded-full blur-3xl transition-all group-hover:bg-primary/20" />
-
-                                                <div className="grid grid-cols-2 gap-8 relative z-10">
+                                            <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-5 space-y-5">
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
                                                     <div>
-                                                        <p className="text-[10px] font-black text-primary uppercase tracking-[0.2em] mb-1 opacity-70">Client Name</p>
-                                                        <p className="text-sm font-black text-neutral-dark dark:text-white leading-tight tracking-tight">{selectedItem.clientName}</p>
+                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Client</p>
+                                                        <p className="text-sm font-black text-neutral-dark dark:text-white leading-tight">{selectedItem.clientName}</p>
                                                     </div>
                                                     <div>
-                                                        <p className="text-[10px] font-black text-primary uppercase tracking-[0.2em] mb-1 opacity-70">Assigned Staff</p>
+                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Assigned Staff</p>
                                                         <StaffAvatar staffName={selectedItem.assignedStaff} allUsers={allUsers} />
                                                     </div>
-                                                </div>
-
-                                                <div className="grid grid-cols-2 gap-8 relative z-10">
                                                     <div>
-                                                        <p className="text-[10px] font-black text-primary uppercase tracking-[0.2em] mb-1 opacity-70">Current Status</p>
+                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Status</p>
                                                         <div className="flex">
                                                             <select
                                                                 value={currentItem.status}
                                                                 onChange={(e) => handleUpdateSpecialStatus(e.target.value)}
                                                                 disabled={isProcessing}
-                                                                className={`appearance-none px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-[0.15em] shadow-sm border transition-all cursor-pointer focus:ring-2 focus:ring-primary/20 outline-none disabled:opacity-50 ${currentItem.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' :
+                                                                className={`appearance-none px-3 py-1.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer focus:ring-4 focus:ring-primary/5 outline-none disabled:opacity-50 ${currentItem.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' :
                                                                         currentItem.status === 'In Progress' ? 'bg-blue-500/10 text-blue-600 border-blue-500/20' :
                                                                             currentItem.status === 'Blocked' ? 'bg-rose-500/10 text-rose-600 border-rose-500/20' :
                                                                                 'bg-neutral-500/10 text-neutral-600 border-neutral-500/20'
@@ -1233,35 +1285,46 @@ const Engagements: React.FC = () => {
                                                         </div>
                                                     </div>
                                                     <div>
-                                                        <p className="text-[10px] font-black text-primary uppercase tracking-[0.2em] mb-1 opacity-70">Project Due Date</p>
-                                                        <div className="flex items-center gap-2">
-                                                            <Calendar size={14} className="text-primary opacity-60" />
-                                                            <p className="text-sm font-black text-neutral-dark dark:text-white leading-tight tracking-tight">
+                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Due Date</p>
+                                                        <div className="flex items-center gap-1.5">
+                                                            <Calendar size={13} className="text-secondary/50" />
+                                                            <p className="text-sm font-bold text-neutral-dark dark:text-white">
                                                                 {formatDisplayDate(selectedItem.endDate) || 'Not specified'}
                                                             </p>
                                                         </div>
                                                     </div>
                                                 </div>
 
-                                                <div className="pt-4 border-t border-neutral-medium/50 dark:border-gray-700/50 relative z-10">
-                                                    <p className="text-[10px] font-black text-primary uppercase tracking-[0.2em] mb-1 opacity-70 dark:opacity-100">Project Description</p>
-                                                    <p className="text-xs text-neutral-dark dark:text-gray-300 leading-relaxed font-bold italic opacity-80 dark:opacity-100">
+                                                <div className="pt-5 border-t border-neutral-medium/50 dark:border-gray-700/70">
+                                                    <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-2">Project Description</p>
+                                                    <p className="text-sm text-neutral-dark/80 dark:text-gray-300 leading-relaxed font-medium italic">
                                                         {selectedItem.description || "No project description provided."}
                                                     </p>
                                                 </div>
                                             </div>
                                         </div>
 
-                                        <div className="space-y-4 animate-in fade-in slide-in-from-bottom duration-700 delay-200">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-1 h-4 bg-primary rounded-full" />
-                                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white uppercase tracking-wider">Project Tasks & Milestones</h3>
+                                        <div className="space-y-4">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <div className="w-1 h-4 bg-primary rounded-full shrink-0" />
+                                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white truncate">Project Tasks & Milestones</h3>
+                                                    <div className="hidden sm:flex items-center gap-1.5 ml-2">
+                                                        <span className="px-2 py-0.5 rounded-md bg-neutral-light dark:bg-gray-900 text-[9px] font-black text-secondary dark:text-gray-400 border border-neutral-medium/60 dark:border-gray-700">
+                                                            {worklogTasks.length} Total
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-[9px] font-black text-emerald-600 border border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">
+                                                            {completedTaskCount} Completed
+                                                        </span>
+                                                        <span className="px-2 py-0.5 rounded-md bg-amber-50 text-[9px] font-black text-amber-600 border border-amber-100 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20">
+                                                            {pendingTaskCount} Pending
+                                                        </span>
+                                                    </div>
                                                 </div>
                                                 {!isAddingTask && (
                                                     <button
                                                         onClick={() => setIsAddingTask(true)}
-                                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary/10 text-primary text-[10px] font-black uppercase tracking-widest hover:bg-primary hover:text-white transition-all transform hover:scale-105"
+                                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-[10px] font-black hover:bg-primary hover:text-white transition-all"
                                                     >
                                                         <Plus size={14} />
                                                         Add Task
@@ -1269,62 +1332,80 @@ const Engagements: React.FC = () => {
                                                 )}
                                             </div>
 
+                                            <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-5 space-y-4">
+
                                             {isAddingTask && (
-                                                <div className="p-6 bg-gradient-to-br from-primary/5 to-transparent rounded-3xl border border-primary/20 space-y-4 shadow-xl shadow-primary/5 animate-in zoom-in-95 duration-200">
-                                                    <div className="flex items-center gap-2 mb-1">
-                                                        <div className="w-2 h-2 rounded-full bg-primary" />
-                                                        <span className="text-[10px] font-black text-primary uppercase tracking-widest">New Project Milestone</span>
+                                                <div className="p-4 bg-primary/[0.03] rounded-xl border border-primary/20 space-y-4 animate-in zoom-in-95 duration-200">
+                                                    <div>
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="w-2 h-2 rounded-full bg-primary" />
+                                                            <span className="text-[10px] font-black text-primary uppercase tracking-widest">New Task</span>
+                                                        </div>
+                                                        <p className="text-[11px] font-medium text-secondary dark:text-gray-400 mt-1">Create a milestone or deliverable for this special engagement.</p>
                                                     </div>
-                                                    <input
-                                                        autoFocus
-                                                        type="text"
-                                                        value={newTaskName}
-                                                        onChange={(e) => setNewTaskName(e.target.value)}
-                                                        placeholder="Enter task name..."
-                                                        className="w-full bg-white dark:bg-gray-800 p-4 rounded-2xl text-sm font-bold border border-neutral-medium dark:border-gray-700 outline-none focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all shadow-inner"
-                                                    />
-                                                    <div className="flex gap-3">
+                                                    <div>
+                                                        <label className="block text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-wider mb-1.5">Task Name</label>
+                                                        <input
+                                                            autoFocus
+                                                            type="text"
+                                                            value={newTaskName}
+                                                            onChange={(e) => setNewTaskName(e.target.value)}
+                                                            placeholder="e.g. Submit registration documents"
+                                                            className="w-full bg-white dark:bg-gray-800 px-3 py-2.5 rounded-xl text-sm font-bold border border-neutral-medium dark:border-gray-700 outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/20 transition-all"
+                                                        />
+                                                    </div>
+                                                    <div className="flex justify-end gap-2 pt-1">
+                                                        <button
+                                                            onClick={() => setIsAddingTask(false)}
+                                                            className="px-4 py-2.5 border border-neutral-medium dark:border-gray-700 rounded-xl text-[10px] font-black text-secondary dark:text-gray-400 hover:bg-neutral-medium/10 dark:hover:bg-gray-700 transition-all"
+                                                        >
+                                                            Cancel
+                                                        </button>
                                                         <button
                                                             onClick={handleAddTask}
                                                             disabled={isProcessing || !newTaskName}
-                                                            className="flex-1 bg-primary hover:bg-primary-dark text-white py-3 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-primary/30 transition-all active:scale-95 disabled:opacity-50"
+                                                            className="px-5 py-2.5 bg-primary hover:bg-primary-dark text-white rounded-xl text-[10px] font-black shadow-lg shadow-primary/20 transition-all active:scale-95 disabled:opacity-50"
                                                         >
-                                                            {isProcessing ? 'Creating...' : 'Initialize Task'}
-                                                        </button>
-                                                        <button
-                                                            onClick={() => setIsAddingTask(false)}
-                                                            className="px-6 py-3 border-2 border-neutral-medium dark:border-gray-700 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] text-secondary dark:text-gray-400 hover:bg-neutral-medium/10 dark:hover:bg-gray-700 transition-all"
-                                                        >
-                                                            Cancel
+                                                            {isProcessing ? 'Creating...' : 'Create Task'}
                                                         </button>
                                                     </div>
                                                 </div>
                                             )}
 
                                             <div className="space-y-4">
-                                                {(context?.taskLog || []).filter(t => normalizeId(t.specialID) === normalizeId(selectedItem.id)).map(task => {
-                                                    const taskActivities = (context?.activityLog || []).filter(a => a.taskID === task.taskID);
+                                                {isWorklogLoading && (
+                                                    <div className="py-8 text-center text-[10px] font-black uppercase tracking-[0.2em] text-secondary/50">
+                                                        Loading project worklog...
+                                                    </div>
+                                                )}
+                                                {!isWorklogLoading && worklogTasks.map(task => {
+                                                    const taskActivities = worklogActivities.filter(a => a.taskID === task.taskID);
                                                     return (
-                                                        <div key={task.taskID} className="group bg-white/60 dark:bg-gray-800/40 backdrop-blur-sm rounded-[1.5rem] border border-white dark:border-gray-700 shadow-xl shadow-primary/5 overflow-hidden transition-all hover:shadow-2xl hover:shadow-primary/10 hover:-translate-y-1 duration-300">
+                                                        <div key={task.taskID} className="group bg-white/70 dark:bg-gray-900/30 rounded-xl border border-neutral-medium/60 dark:border-gray-700 overflow-hidden transition-all hover:bg-white dark:hover:bg-gray-900/50">
                                                             {/* Task Header - Premium */}
-                                                            <div className="px-6 py-4 flex items-center justify-between bg-gradient-to-r from-neutral-light/30 to-transparent dark:from-gray-800/30">
+                                                            <div className="px-4 py-3 flex items-center justify-between bg-neutral-light/30 dark:bg-gray-900/40">
                                                                 {editingTaskId === task.taskID ? (
-                                                                    <div className="flex-1 space-y-3">
-                                                                        <input
-                                                                            disabled={isProcessing}
-                                                                            type="text"
-                                                                            value={editTaskName}
-                                                                            onChange={(e) => setEditTaskName(e.target.value)}
-                                                                            className="w-full bg-white dark:bg-gray-800 px-3 py-2 rounded-xl text-sm font-black border border-primary/20 outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                                        />
-                                                                        <div className="flex items-center justify-between">
-                                                                            <div className="flex gap-2">
+                                                                    <div className="flex-1 bg-white dark:bg-gray-800 rounded-xl border border-primary/20 p-3 space-y-3 shadow-sm">
+                                                                        <div>
+                                                                            <label className="block text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-wider mb-1.5">Task Name</label>
+                                                                            <input
+                                                                                disabled={isProcessing}
+                                                                                type="text"
+                                                                                value={editTaskName}
+                                                                                onChange={(e) => setEditTaskName(e.target.value)}
+                                                                                className="w-full bg-neutral-light/60 dark:bg-gray-900 px-3 py-2 rounded-lg text-sm font-bold border border-neutral-medium dark:border-gray-700 outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                                            />
+                                                                        </div>
+                                                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                                                            <div>
+                                                                                <p className="text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-wider mb-1.5">Status</p>
+                                                                                <div className="flex gap-2">
                                                                                 {(['Pending', 'Completed'] as const).map(s => (
                                                                                     <button
                                                                                         key={s}
                                                                                         disabled={isProcessing}
                                                                                         onClick={() => setEditTaskStatus(s)}
-                                                                                        className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest border transition-all ${editTaskStatus === s
+                                                                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black border transition-all ${editTaskStatus === s
                                                                                                 ? 'bg-primary text-white border-primary shadow-lg shadow-primary/20'
                                                                                                 : 'bg-white dark:bg-gray-800 text-secondary dark:text-gray-400 border-neutral-medium dark:border-gray-700'
                                                                                             } ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -1332,19 +1413,20 @@ const Engagements: React.FC = () => {
                                                                                         {s}
                                                                                     </button>
                                                                                 ))}
+                                                                                </div>
                                                                             </div>
                                                                             <div className="flex gap-2">
                                                                                 <button
                                                                                     disabled={isProcessing}
                                                                                     onClick={() => setEditingTaskId(null)}
-                                                                                    className="px-3 py-1 text-[9px] font-black uppercase tracking-widest text-secondary dark:text-gray-400 hover:bg-neutral-medium/10 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                                                                    className="px-3 py-2 text-[10px] font-black text-secondary dark:text-gray-400 hover:bg-neutral-medium/10 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                                                                                 >
                                                                                     Cancel
                                                                                 </button>
                                                                                 <button
                                                                                     onClick={() => handleUpdateTask(task.taskID)}
                                                                                     disabled={isProcessing || !editTaskName}
-                                                                                    className="bg-emerald-600 text-white px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest shadow-lg shadow-emerald-600/20 hover:scale-105 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                                                    className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-[10px] font-black shadow-lg shadow-emerald-600/20 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                                                                 >
                                                                                     {isProcessing && <Loader2 className="animate-spin" size={10} />}
                                                                                     {isProcessing ? 'Saving...' : 'Save'}
@@ -1354,15 +1436,15 @@ const Engagements: React.FC = () => {
                                                                     </div>
                                                                 ) : (
                                                                     <>
-                                                                        <div className="flex items-center gap-4">
-                                                                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-inner ${task.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-primary/10 text-primary'
+                                                                        <div className="flex items-center gap-3">
+                                                                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${task.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-primary/10 text-primary'
                                                                                 }`}>
-                                                                                <CheckSquare size={20} />
+                                                                                <CheckSquare size={17} />
                                                                             </div>
                                                                             <div>
-                                                                                <h4 className="text-sm font-black text-neutral-dark dark:text-white leading-tight tracking-tight">{task.taskName}</h4>
+                                                                                <h4 className="text-sm font-bold text-neutral-dark dark:text-white leading-tight tracking-tight">{task.taskName}</h4>
                                                                                 <div className="flex items-center gap-2 mt-1">
-                                                                                    <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-lg border ${task.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' : 'bg-amber-500/10 text-amber-600 border-amber-500/20'
+                                                                                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-lg border ${task.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' : 'bg-amber-500/10 text-amber-600 border-amber-500/20'
                                                                                         }`}>
                                                                                         {task.status}
                                                                                     </span>
@@ -1434,33 +1516,39 @@ const Engagements: React.FC = () => {
 
                                                                                     <div className="flex-1 min-w-0">
                                                                                         {editingActivityId === activity.activityID ? (
-                                                                                            <div className="bg-white/80 dark:bg-gray-800/80 p-4 rounded-2xl border border-primary/20 space-y-3 shadow-lg">
-                                                                                                <textarea
-                                                                                                    value={editActivityDesc}
-                                                                                                    onChange={(e) => setEditActivityDesc(e.target.value)}
-                                                                                                    disabled={isProcessing}
-                                                                                                    className="w-full bg-white dark:bg-gray-700 px-3 py-2 rounded-xl text-xs font-bold border border-neutral-medium dark:border-gray-600 outline-none focus:ring-2 focus:ring-primary/20 min-h-[80px] disabled:opacity-50"
-                                                                                                />
-                                                                                                <div className="flex items-center justify-between gap-4">
-                                                                                                    <input
-                                                                                                        type="date"
-                                                                                                        value={editActivityDate}
-                                                                                                        onChange={(e) => setEditActivityDate(e.target.value)}
+                                                                                            <div className="bg-white/90 dark:bg-gray-800/90 p-4 rounded-xl border border-primary/20 space-y-3 shadow-sm">
+                                                                                                <div>
+                                                                                                    <label className="block text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-wider mb-1.5">Progress Note</label>
+                                                                                                    <textarea
+                                                                                                        value={editActivityDesc}
+                                                                                                        onChange={(e) => setEditActivityDesc(e.target.value)}
                                                                                                         disabled={isProcessing}
-                                                                                                        className="bg-white dark:bg-gray-700 px-3 py-1.5 rounded-lg text-[10px] font-black border border-neutral-medium dark:border-gray-600 outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50 w-32"
+                                                                                                        className="w-full bg-neutral-light/60 dark:bg-gray-900 px-3 py-2 rounded-xl text-sm font-medium border border-neutral-medium dark:border-gray-700 outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/20 min-h-[88px] disabled:opacity-50 resize-none"
                                                                                                     />
-                                                                                                    <div className="flex gap-2">
+                                                                                                </div>
+                                                                                                <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+                                                                                                    <div>
+                                                                                                        <label className="block text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-wider mb-1.5">Date Completed</label>
+                                                                                                        <input
+                                                                                                            type="date"
+                                                                                                            value={editActivityDate}
+                                                                                                            onChange={(e) => setEditActivityDate(e.target.value)}
+                                                                                                            disabled={isProcessing}
+                                                                                                            className="bg-neutral-light/60 dark:bg-gray-900 px-3 py-2 rounded-lg text-xs font-bold border border-neutral-medium dark:border-gray-700 outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/20 disabled:opacity-50 w-40"
+                                                                                                        />
+                                                                                                    </div>
+                                                                                                    <div className="flex justify-end gap-2">
                                                                                                         <button
                                                                                                             onClick={() => setEditingActivityId(null)}
                                                                                                             disabled={isProcessing}
-                                                                                                            className="px-3 py-1 text-[9px] font-black uppercase tracking-widest text-secondary hover:bg-neutral-medium/10 rounded-lg disabled:opacity-50"
+                                                                                                            className="px-3 py-2 text-[10px] font-black text-secondary hover:bg-neutral-medium/10 rounded-lg disabled:opacity-50"
                                                                                                         >
                                                                                                             Cancel
                                                                                                         </button>
                                                                                                         <button
                                                                                                             onClick={() => handleUpdateActivity(activity.activityID)}
                                                                                                             disabled={isProcessing || !editActivityDesc}
-                                                                                                            className="bg-emerald-600 text-white px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest shadow-lg shadow-emerald-600/20 hover:scale-105 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50"
+                                                                                                            className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-[10px] font-black shadow-lg shadow-emerald-600/20 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50"
                                                                                                         >
                                                                                                             {isProcessing && <Loader2 className="animate-spin" size={10} />}
                                                                                                             {isProcessing ? 'Saving...' : 'Save'}
@@ -1534,35 +1622,45 @@ const Engagements: React.FC = () => {
                                                                     )}
 
                                                                     {addingActivityToTaskId === task.taskID && (
-                                                                        <div className="mt-2 p-3 bg-primary/[0.03] rounded-xl border border-primary/10 space-y-2 animate-in slide-in-from-top-2 duration-200">
-                                                                            <textarea
-                                                                                autoFocus
-                                                                                value={newActivityDesc}
-                                                                                onChange={(e) => setNewActivityDesc(e.target.value)}
-                                                                                placeholder="What was accomplished?"
-                                                                                className="w-full bg-white dark:bg-gray-800 p-2 rounded-lg text-xs font-medium border border-neutral-medium dark:border-gray-700 outline-none focus:ring-2 focus:ring-primary/10 h-14 resize-none"
-                                                                            />
-                                                                            <div className="flex items-center justify-between gap-2">
-                                                                                <input
-                                                                                    type="date"
-                                                                                    value={activityDate}
-                                                                                    onChange={(e) => setActivityDate(e.target.value)}
-                                                                                    className="w-32 bg-white dark:bg-gray-800 px-2 py-1 rounded-md text-[10px] font-bold border border-neutral-medium dark:border-gray-700 outline-none"
+                                                                        <div className="mt-2 p-4 bg-primary/[0.03] rounded-xl border border-primary/20 space-y-3 animate-in slide-in-from-top-2 duration-200">
+                                                                            <div className="flex items-center gap-2">
+                                                                                <div className="w-2 h-2 rounded-full bg-primary" />
+                                                                                <span className="text-[10px] font-black text-primary uppercase tracking-widest">Post Progress</span>
+                                                                            </div>
+                                                                            <div>
+                                                                                <label className="block text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-wider mb-1.5">Progress Note</label>
+                                                                                <textarea
+                                                                                    autoFocus
+                                                                                    value={newActivityDesc}
+                                                                                    onChange={(e) => setNewActivityDesc(e.target.value)}
+                                                                                    placeholder="What was accomplished?"
+                                                                                    className="w-full bg-white dark:bg-gray-800 px-3 py-2 rounded-xl text-sm font-medium border border-neutral-medium dark:border-gray-700 outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/20 min-h-[80px] resize-none"
                                                                                 />
-                                                                                <div className="flex gap-2">
+                                                                            </div>
+                                                                            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+                                                                                <div>
+                                                                                    <label className="block text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-wider mb-1.5">Date Completed</label>
+                                                                                    <input
+                                                                                        type="date"
+                                                                                        value={activityDate}
+                                                                                        onChange={(e) => setActivityDate(e.target.value)}
+                                                                                        className="w-40 bg-white dark:bg-gray-800 px-3 py-2 rounded-lg text-xs font-bold border border-neutral-medium dark:border-gray-700 outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/20"
+                                                                                    />
+                                                                                </div>
+                                                                                <div className="flex justify-end gap-2">
                                                                                     <button
                                                                                         onClick={() => {
                                                                                             setAddingActivityToTaskId(null);
                                                                                             setNewActivityDesc('');
                                                                                         }}
-                                                                                        className="px-3 py-1 rounded-md text-[9px] font-black uppercase tracking-widest text-secondary dark:text-gray-400 hover:bg-neutral-medium/10 transition-all"
+                                                                                        className="px-3 py-2 rounded-lg text-[10px] font-black text-secondary dark:text-gray-400 hover:bg-neutral-medium/10 transition-all"
                                                                                     >
                                                                                         Cancel
                                                                                     </button>
                                                                                     <button
                                                                                         onClick={() => handleAddActivity(task.taskID)}
                                                                                         disabled={isProcessing || !newActivityDesc}
-                                                                                        className="bg-primary hover:bg-primary-dark text-white px-3 py-1 rounded-md text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-50 shadow-md shadow-primary/20"
+                                                                                        className="bg-primary hover:bg-primary-dark text-white px-4 py-2 rounded-lg text-[10px] font-black transition-all disabled:opacity-50 shadow-md shadow-primary/20"
                                                                                     >
                                                                                         {isProcessing ? '...' : 'Add Log'}
                                                                                     </button>
@@ -1582,7 +1680,7 @@ const Engagements: React.FC = () => {
                                             </div>
 
                                             {/* Empty state for special */}
-                                            {(context?.taskLog || []).filter(t => normalizeId(t.specialID) === normalizeId(selectedItem.id)).length === 0 && (
+                                            {!isWorklogLoading && worklogTasks.length === 0 && (
                                                 <div className="py-12 px-6 text-center bg-white dark:bg-gray-800/40 rounded-[2.5rem] border-2 border-dashed border-neutral-medium dark:border-gray-800 group hover:border-primary/30 transition-all duration-500">
                                                     <div className="w-16 h-16 bg-neutral-light/50 dark:bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform duration-500">
                                                         <Briefcase size={28} className="text-secondary/30 group-hover:text-primary transition-colors" />
@@ -1598,6 +1696,7 @@ const Engagements: React.FC = () => {
                                                     </button>
                                                 </div>
                                             )}
+                                            </div>
                                         </div>
                                     </section>
                                 );
@@ -1746,8 +1845,24 @@ const RetainerTable: React.FC<{
     allUsers: any[];
     groupBy: string;
 }> = ({ instances, user, onSelect, allUsers, groupBy }) => {
-    const isSenior = user?.role === UserRole.SENIOR;
     const isStaff = user?.role === UserRole.STAFF;
+    const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+    const toggleGroup = (group: string) => {
+        setExpandedGroups(prev => {
+            const next = new Set(prev);
+            if (next.has(group)) next.delete(group);
+            else next.add(group);
+            return next;
+        });
+    };
+
+    const getGroupStats = (items: any[]) => items.reduce((acc, inst) => {
+        if (inst.status === 'LATE') acc.late += 1;
+        else if (inst.status === 'Filed') acc.filed += 1;
+        else acc.pending += 1;
+        return acc;
+    }, { late: 0, pending: 0, filed: 0 });
 
     const renderRow = (inst: any, isChild = false) => (
         <tr
@@ -1755,25 +1870,24 @@ const RetainerTable: React.FC<{
             onClick={() => onSelect(inst)}
             className={`group cursor-pointer transition-all duration-300 hover:bg-primary/[0.02] dark:hover:bg-primary/[0.05] border-b border-neutral-medium/50 dark:border-gray-800 last:border-0`}
         >
-            <td className="px-4 py-2.5">
-                <div className={`font-black text-neutral-dark dark:text-white text-[13px] tracking-tight group-hover:text-primary transition-colors ${isChild ? 'opacity-50' : ''}`} title={inst.clientName}>
+            <td className="px-4 py-2">
+                <div className="font-bold text-neutral-dark dark:text-white text-[12px] tracking-tight group-hover:text-primary transition-colors" title={inst.clientName}>
                     {inst.clientName}
                 </div>
             </td>
-            <td className="px-4 py-2.5">
-                <div className="flex flex-col">
-                    <span className="text-[11px] font-black text-secondary dark:text-gray-400 uppercase tracking-wider">{inst.complianceName}</span>
-                    <span className="text-[10px] font-bold text-secondary/50 dark:text-gray-400/50 italic opacity-100">{inst.taxPeriod}</span>
+            <td className="px-4 py-2">
+                <div className="text-[11.5px] font-bold text-secondary dark:text-gray-400 leading-snug" title={inst.complianceName}>
+                    {inst.complianceName}
                 </div>
             </td>
-            <td className="px-4 py-2.5">
+            <td className="px-4 py-2">
                 <div className="flex items-center gap-1.5">
                     <Calendar size={12} className="text-secondary/50 dark:text-gray-400/50" />
-                    <span className="text-[12px] font-black text-neutral-dark dark:text-white">{inst.dueDate}</span>
+                    <span className="text-[11px] font-extrabold text-neutral-dark dark:text-white">{inst.dueDate}</span>
                 </div>
             </td>
-            <td className="px-4 py-2.5">
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest border shadow-sm ${inst.status === 'Filed'
+            <td className="px-4 py-2">
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border shadow-sm ${inst.status === 'Filed'
                         ? 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
                         : inst.status === 'LATE'
                             ? 'bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20'
@@ -1784,10 +1898,10 @@ const RetainerTable: React.FC<{
                     {inst.status}
                 </span>
             </td>
-            <td className="px-4 py-2.5">
+            <td className="px-4 py-2">
                 <StaffAvatar staffName={inst.assignedStaff} allUsers={allUsers} />
             </td>
-            <td className="px-4 py-2.5 text-right">
+            <td className="px-4 py-2 text-right">
                 <div className="flex justify-end opacity-0 group-hover:opacity-100 transition-all transform translate-x-1 group-hover:translate-x-0">
                     <div className="p-1.5 bg-primary text-white rounded-lg shadow-lg shadow-primary/20 scale-90 group-hover:scale-100 transition-transform">
                         <ArrowUpRight size={12} strokeWidth={3} />
@@ -1801,11 +1915,11 @@ const RetainerTable: React.FC<{
         <table className="w-full text-left border-collapse table-fixed">
             <thead>
                 <tr className="bg-neutral-light/50 dark:bg-gray-900/50 border-b border-neutral-medium dark:border-gray-700">
-                    <th className="w-[28%] px-4 py-3 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.2em]">Client Entity</th>
-                    <th className="w-[22%] px-4 py-3 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.2em]">Compliance Type</th>
-                    <th className="w-[15%] px-4 py-3 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.2em]">Due Date</th>
-                    <th className="w-[12%] px-4 py-3 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.2em]">Status</th>
-                    <th className="w-[15%] px-4 py-3 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.2em]">Assigned To</th>
+                    <th className="w-[28%] px-4 py-2.5 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.18em]">Client Entity</th>
+                    <th className="w-[24%] px-4 py-2.5 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.18em]">Compliance Type</th>
+                    <th className="w-[14%] px-4 py-2.5 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.18em]">Due Date</th>
+                    <th className="w-[12%] px-4 py-2.5 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.18em]">Status</th>
+                    <th className="w-[14%] px-4 py-2.5 text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.18em]">Assigned To</th>
                     <th className="w-[8%] px-4 py-3 text-right"></th>
                 </tr>
             </thead>
@@ -1816,56 +1930,62 @@ const RetainerTable: React.FC<{
                         if (!acc[key]) acc[key] = [];
                         acc[key].push(inst);
                         return acc;
-                    }, {} as Record<string, any[]>)) as [string, any[]][]).map(([group, subItems]) => (
-                        <React.Fragment key={group}>
-                            <tr className="bg-neutral-light/30 dark:bg-gray-900/40">
-                                <td colSpan={6} className="px-6 py-2 border-b border-neutral-medium/50 dark:border-gray-800">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-primary/40" />
-                                        <span className="text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-[0.2em]">{group}</span>
-                                        <span className="px-1.5 py-0.5 rounded-md bg-white dark:bg-gray-800 text-[9px] font-black text-primary border border-neutral-medium dark:border-gray-700 ml-auto">
-                                            {subItems.length} ITEMS
-                                        </span>
-                                    </div>
-                                </td>
-                            </tr>
-                            {subItems.map(inst => renderRow(inst, true))}
-                        </React.Fragment>
-                    ))
+                    }, {} as Record<string, any[]>)) as [string, any][])
+                        .sort(([a], [b]) => a.localeCompare(b))
+                        .map(([group, subItems]) => {
+                        const isExpanded = expandedGroups.has(group);
+                        const stats = getGroupStats(subItems);
+
+                        return (
+                            <React.Fragment key={group}>
+                                <tr
+                                    onClick={() => toggleGroup(group)}
+                                    className="bg-neutral-light/40 dark:bg-gray-900/50 cursor-pointer hover:bg-primary/[0.04] dark:hover:bg-primary/[0.08] transition-colors"
+                                >
+                                    <td colSpan={6} className="px-5 py-2.5 border-b border-neutral-medium/50 dark:border-gray-800">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <ChevronRight
+                                                size={14}
+                                                className={`text-secondary/60 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                            />
+                                            {groupBy === 'Staff' ? (
+                                                <StaffGroupLabel staffName={group} allUsers={allUsers} />
+                                            ) : (
+                                                <span className="text-[11px] font-bold text-neutral-dark dark:text-white">{group}</span>
+                                            )}
+                                            <span className="px-1.5 py-0.5 rounded-md bg-white dark:bg-gray-800 text-[9px] font-black text-primary border border-neutral-medium dark:border-gray-700">
+                                                {subItems.length} ITEMS
+                                            </span>
+                                            <div className="flex items-center gap-1 ml-auto">
+                                                {stats.late > 0 && (
+                                                    <span className="px-1.5 py-0.5 rounded-md bg-rose-50 text-[9px] font-black text-rose-600 border border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20">
+                                                        {stats.late} LATE
+                                                    </span>
+                                                )}
+                                                {stats.pending > 0 && (
+                                                    <span className="px-1.5 py-0.5 rounded-md bg-amber-50 text-[9px] font-black text-amber-600 border border-amber-100 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20">
+                                                        {stats.pending} PENDING
+                                                    </span>
+                                                )}
+                                                {stats.filed > 0 && (
+                                                    <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 text-[9px] font-black text-emerald-600 border border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">
+                                                        {stats.filed} FILED
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {isExpanded && subItems.map(inst => renderRow(inst, true))}
+                            </React.Fragment>
+                        );
+                    })
                 }
             </tbody>
         </table>
     );
 
     if (isStaff) return <div className="bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-lg shadow-neutral-dark/5 overflow-x-auto">{renderTable(instances)}</div>;
-
-    if (isSenior) {
-        const myEngagements = instances.filter(i => i.assignedStaff === user.firstName || i.assignedStaff === `${user.firstName} ${user.lastName}`);
-        const others = instances.filter(i => i.assignedStaff !== user.firstName && i.assignedStaff !== `${user.firstName} ${user.lastName}`);
-        const staffGroups = others.reduce((acc, i) => {
-            if (!acc[i.assignedStaff]) acc[i.assignedStaff] = [];
-            acc[i.assignedStaff].push(i);
-            return acc;
-        }, {} as Record<string, any[]>);
-
-        return (
-            <div className="space-y-2 py-1">
-                <CollapsibleSection title="My Engagements" count={myEngagements.length} icon={<FileText size={16} />} defaultOpen={true}>
-                    {myEngagements.length > 0 ? renderTable(myEngagements) : (
-                        <div className="p-12 text-center animate-in fade-in zoom-in-95 duration-500">
-                            <FileText className="mx-auto text-secondary/20 mb-3" size={32} />
-                            <p className="text-[11px] font-black text-secondary/40 uppercase tracking-widest italic">No personal engagements due</p>
-                        </div>
-                    )}
-                </CollapsibleSection>
-                {(Object.entries(staffGroups) as [string, any[]][]).sort(([a], [b]) => a.localeCompare(b)).map(([staffName, items]) => (
-                    <CollapsibleSection key={staffName} title={`${staffName.split(' ')[0]}'s Engagements`} count={items.length} icon={<Briefcase size={16} />} color="secondary">
-                        {renderTable(items)}
-                    </CollapsibleSection>
-                ))}
-            </div>
-        );
-    }
 
     return <div className="bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-lg shadow-neutral-dark/5 overflow-x-auto">{renderTable(instances)}</div>;
 };
@@ -1877,12 +1997,31 @@ const SpecialTable: React.FC<{
     allUsers: any[];
     groupBy: string;
 }> = ({ instances, user, onSelect, allUsers, groupBy }) => {
-    const isSenior = user?.role === UserRole.SENIOR;
     const isStaff = user?.role === UserRole.STAFF;
+    const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+    const toggleGroup = (group: string) => {
+        setExpandedGroups(prev => {
+            const next = new Set(prev);
+            if (next.has(group)) next.delete(group);
+            else next.add(group);
+            return next;
+        });
+    };
+
+    const getGroupStats = (items: any[]) => items.reduce((acc, inst) => {
+        const status = inst.displayStatus || inst.status;
+        if (status === 'Overdue') acc.overdue += 1;
+        else if (status === 'Completed') acc.completed += 1;
+        else if (status === 'Blocked') acc.blocked += 1;
+        else if (status === 'In Progress') acc.inProgress += 1;
+        else acc.planning += 1;
+        return acc;
+    }, { planning: 0, inProgress: 0, completed: 0, blocked: 0, overdue: 0 });
 
     const renderRow = (inst: any, isChild = false) => {
         // Frontend-only: show "Overdue" when not Completed and today > endDate
-        let displayStatus = inst.status;
+        let displayStatus = inst.displayStatus || inst.status;
         if (inst.status !== 'Completed' && inst.endDate) {
             try {
                 const [m, d, y] = inst.endDate.split('/');
@@ -1911,7 +2050,7 @@ const SpecialTable: React.FC<{
                 className="group cursor-pointer transition-all duration-300 hover:bg-primary/[0.02] dark:hover:bg-primary/[0.05] border-b border-neutral-medium/50 dark:border-gray-800 last:border-0"
             >
                 <td className="px-4 py-2.5">
-                    <div className={`font-black text-neutral-dark dark:text-white text-[13px] tracking-tight group-hover:text-primary transition-colors ${isChild ? 'opacity-50' : ''}`} title={inst.engagementName}>
+                    <div className="font-black text-neutral-dark dark:text-white text-[13px] tracking-tight group-hover:text-primary transition-colors" title={inst.engagementName}>
                         {inst.engagementName}
                     </div>
                 </td>
@@ -1980,60 +2119,81 @@ const SpecialTable: React.FC<{
             <tbody className="divide-y divide-neutral-medium/30 dark:divide-gray-800">
                 {groupBy === 'None' ? items.map(inst => renderRow(inst)) : 
                     (Object.entries(items.reduce((acc, inst) => {
-                        const key = groupBy === 'Client' ? inst.clientName : inst.assignedStaff;
+                        const key = groupBy === 'Client' ? inst.clientName : groupBy === 'Status' ? (inst.displayStatus || inst.status) : inst.assignedStaff;
                         if (!acc[key]) acc[key] = [];
                         acc[key].push(inst);
                         return acc;
-                    }, {} as Record<string, any[]>)) as [string, any[]][]).map(([group, subItems]) => (
-                        <React.Fragment key={group}>
-                            <tr className="bg-neutral-light/30 dark:bg-gray-900/40">
-                                <td colSpan={6} className="px-6 py-2 border-b border-neutral-medium/50 dark:border-gray-800">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-primary/40" />
-                                        <span className="text-[10px] font-black text-secondary uppercase tracking-[0.2em]">{group}</span>
-                                        <span className="px-1.5 py-0.5 rounded-md bg-white dark:bg-gray-800 text-[9px] font-black text-primary border border-neutral-medium dark:border-gray-700 ml-auto">
-                                            {subItems.length} ITEMS
-                                        </span>
-                                    </div>
-                                </td>
-                            </tr>
-                            {subItems.map(inst => renderRow(inst, true))}
-                        </React.Fragment>
-                    ))
+                    }, {} as Record<string, any[]>)) as [string, any[]][])
+                        .sort(([a], [b]) => {
+                            if (groupBy === 'Status') {
+                                return (specialStatusOrder[a] ?? 99) - (specialStatusOrder[b] ?? 99);
+                            }
+                            return a.localeCompare(b);
+                        })
+                        .map(([group, subItems]) => {
+                            const isExpanded = expandedGroups.has(group);
+                            const stats = getGroupStats(subItems);
+
+                            return (
+                                <React.Fragment key={group}>
+                                    <tr
+                                        onClick={() => toggleGroup(group)}
+                                        className="bg-neutral-light/40 dark:bg-gray-900/50 cursor-pointer hover:bg-primary/[0.04] dark:hover:bg-primary/[0.08] transition-colors"
+                                    >
+                                        <td colSpan={6} className="px-5 py-2.5 border-b border-neutral-medium/50 dark:border-gray-800">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <ChevronRight
+                                                    size={14}
+                                                    className={`text-secondary/60 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                                />
+                                                {groupBy === 'Staff' ? (
+                                                    <StaffGroupLabel staffName={group} allUsers={allUsers} />
+                                                ) : (
+                                                    <span className="text-[11px] font-bold text-neutral-dark dark:text-white">{group}</span>
+                                                )}
+                                                <span className="px-1.5 py-0.5 rounded-md bg-white dark:bg-gray-800 text-[9px] font-black text-primary border border-neutral-medium dark:border-gray-700">
+                                                    {subItems.length} ITEMS
+                                                </span>
+                                                <div className="flex items-center gap-1 ml-auto">
+                                                    {stats.planning > 0 && (
+                                                        <span className="px-1.5 py-0.5 rounded-md bg-neutral-50 text-[9px] font-black text-neutral-600 border border-neutral-100 dark:bg-gray-500/10 dark:text-gray-400 dark:border-gray-500/20">
+                                                            {stats.planning} Planning
+                                                        </span>
+                                                    )}
+                                                    {stats.overdue > 0 && (
+                                                        <span className="px-1.5 py-0.5 rounded-md bg-rose-50 text-[9px] font-black text-rose-600 border border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20">
+                                                            {stats.overdue} Overdue
+                                                        </span>
+                                                    )}
+                                                    {stats.inProgress > 0 && (
+                                                        <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-[9px] font-black text-blue-600 border border-blue-100 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20">
+                                                            {stats.inProgress} In Progress
+                                                        </span>
+                                                    )}
+                                                    {stats.completed > 0 && (
+                                                        <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 text-[9px] font-black text-emerald-600 border border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">
+                                                            {stats.completed} Completed
+                                                        </span>
+                                                    )}
+                                                    {stats.blocked > 0 && (
+                                                        <span className="px-1.5 py-0.5 rounded-md bg-red-50 text-[9px] font-black text-red-600 border border-red-100 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20">
+                                                            {stats.blocked} Blocked
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {isExpanded && subItems.map(inst => renderRow(inst, true))}
+                                </React.Fragment>
+                            );
+                        })
                 }
             </tbody>
         </table>
     );
 
     if (isStaff) return <div className="bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-lg shadow-neutral-dark/5 overflow-x-auto">{renderTable(instances)}</div>;
-
-    if (isSenior) {
-        const myEngagements = instances.filter(i => i.assignedStaff === user.firstName || i.assignedStaff === `${user.firstName} ${user.lastName}`);
-        const others = instances.filter(i => i.assignedStaff !== user.firstName && i.assignedStaff !== `${user.firstName} ${user.lastName}`);
-        const staffGroups = others.reduce((acc, i) => {
-            if (!acc[i.assignedStaff]) acc[i.assignedStaff] = [];
-            acc[i.assignedStaff].push(i);
-            return acc;
-        }, {} as Record<string, any[]>);
-
-        return (
-            <div className="space-y-2 py-1">
-                <CollapsibleSection title="My Projects" count={myEngagements.length} icon={<Briefcase size={16} />} defaultOpen={true}>
-                    {myEngagements.length > 0 ? renderTable(myEngagements) : (
-                        <div className="p-12 text-center animate-in fade-in zoom-in-95 duration-500">
-                            <Briefcase className="mx-auto text-secondary/20 mb-3" size={32} />
-                            <p className="text-[11px] font-black text-secondary/40 uppercase tracking-widest italic">No personal projects active</p>
-                        </div>
-                    )}
-                </CollapsibleSection>
-                {(Object.entries(staffGroups) as [string, any[]][]).sort(([a], [b]) => a.localeCompare(b)).map(([staffName, items]) => (
-                    <CollapsibleSection key={staffName} title={`${staffName.split(' ')[0]}'s Projects`} count={items.length} icon={<Briefcase size={16} />} color="secondary">
-                        {renderTable(items)}
-                    </CollapsibleSection>
-                ))}
-            </div>
-        );
-    }
 
     return <div className="bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-lg shadow-neutral-dark/5 overflow-x-auto">{renderTable(instances)}</div>;
 };
@@ -2045,19 +2205,20 @@ const StaffAvatar: React.FC<{
     allUsers: any[];
 }> = ({ staffName, allUsers }) => {
     const staff = allUsers.find(u => `${u.firstName} ${u.lastName}` === staffName || u.firstName === staffName);
-    const initials = staffName.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
 
     return (
-        <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center overflow-hidden shrink-0">
-                {staff?.avatarUrl ? (
-                    <img src={staff.avatarUrl} alt={staffName} className="w-full h-full object-cover" />
-                ) : (
-                    <span className="text-[10px] font-black text-primary">{initials}</span>
-                )}
-            </div>
-            <span className="text-[12px] font-bold text-neutral-dark dark:text-white truncate max-w-[150px]">{staffName}</span>
-        </div>
+        <UserHoverCard user={staff} fallbackName={staffName} size="md" showName />
+    );
+};
+
+const StaffGroupLabel: React.FC<{
+    staffName: string;
+    allUsers: any[];
+}> = ({ staffName, allUsers }) => {
+    const staff = allUsers.find(u => `${u.firstName} ${u.lastName}` === staffName || u.firstName === staffName);
+
+    return (
+        <UserHoverCard user={staff} fallbackName={staffName} size="sm" showName nameClassName="text-[12px] font-bold text-neutral-dark dark:text-white truncate" />
     );
 };
 
@@ -2067,7 +2228,7 @@ const EmptyState: React.FC<{
     query?: string;
     defaultMessage: string;
 }> = ({ icon: Icon, title, query, defaultMessage }) => (
-    <div className="p-16 text-center bg-white dark:bg-gray-800 rounded-2xl border border-dashed border-neutral-medium dark:border-gray-700 animate-in fade-in zoom-in-95 slide-in-from-top-4 duration-700">
+    <div key={`${title}-${query || 'empty'}`} className="p-16 text-center bg-white dark:bg-gray-800 rounded-2xl border border-dashed border-neutral-medium dark:border-gray-700 animate-in fade-in zoom-in-95 slide-in-from-top-4 duration-700">
         <div className="relative w-20 h-20 mx-auto mb-6">
             <Icon className="absolute inset-0 m-auto text-primary/10" size={64} />
             <Search className="absolute bottom-0 right-0 text-primary/30" size={24} />
@@ -2078,6 +2239,221 @@ const EmptyState: React.FC<{
         </p>
     </div>
 );
+
+const PaginationControls: React.FC<{
+    page: number;
+    pageSize: number;
+    total: number;
+    onPageChange: (page: number) => void;
+}> = ({ page, pageSize, total, onPageChange }) => {
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const start = (page - 1) * pageSize + 1;
+    const end = Math.min(page * pageSize, total);
+
+    return (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm px-4 py-3">
+            <p className="text-[11px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest">
+                Showing {start}-{end} of {total}
+            </p>
+            <div className="flex items-center gap-2">
+                <button
+                    onClick={() => onPageChange(Math.max(1, page - 1))}
+                    disabled={page <= 1}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[11px] font-black uppercase tracking-wider text-neutral-dark dark:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-light dark:hover:bg-gray-700 transition-colors"
+                >
+                    <ChevronRight size={14} className="rotate-180" />
+                    Prev
+                </button>
+                <span className="px-3 py-1.5 rounded-lg bg-neutral-light dark:bg-gray-900 text-[11px] font-black text-primary">
+                    {page} / {totalPages}
+                </span>
+                <button
+                    onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+                    disabled={page >= totalPages}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[11px] font-black uppercase tracking-wider text-neutral-dark dark:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-light dark:hover:bg-gray-700 transition-colors"
+                >
+                    Next
+                    <ChevronRight size={14} />
+                </button>
+            </div>
+        </div>
+    );
+};
+
+const RetainerSummaryStrip: React.FC<{
+    summary: { total: number; late: number; pending: number; filed: number; staffCount: number };
+}> = ({ summary }) => {
+    const items = [
+        { label: 'Total', value: summary.total, tone: 'text-primary bg-primary/10 border-primary/15' },
+        { label: 'Late', value: summary.late, tone: 'text-rose-600 bg-rose-50 border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20' },
+        { label: 'Pending', value: summary.pending, tone: 'text-amber-600 bg-amber-50 border-amber-100 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20' },
+        { label: 'Filed', value: summary.filed, tone: 'text-emerald-600 bg-emerald-50 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' },
+        { label: 'Staff', value: summary.staffCount, tone: 'text-secondary bg-neutral-light border-neutral-medium dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700' }
+    ];
+
+    return (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            {items.map(item => (
+                <div key={item.label} className={`rounded-xl border px-3 py-2 ${item.tone}`}>
+                    <div className="text-[11px] font-bold opacity-70">{item.label}</div>
+                    <div className="text-xl font-black leading-tight">{item.value}</div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+const SpecialSummaryStrip: React.FC<{
+    summary: { total: number; planning: number; inProgress: number; completed: number; blocked: number; overdue: number };
+}> = ({ summary }) => {
+    const items = [
+        { label: 'Total', value: summary.total, tone: 'text-primary bg-primary/10 border-primary/15' },
+        { label: 'Overdue', value: summary.overdue, tone: 'text-rose-600 bg-rose-50 border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20' },
+        { label: 'Blocked', value: summary.blocked, tone: 'text-red-600 bg-red-50 border-red-100 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20' },
+        { label: 'In Progress', value: summary.inProgress, tone: 'text-blue-600 bg-blue-50 border-blue-100 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20' },
+        { label: 'Planning', value: summary.planning, tone: 'text-neutral-600 bg-neutral-50 border-neutral-100 dark:bg-gray-500/10 dark:text-gray-300 dark:border-gray-500/20' },
+        { label: 'Completed', value: summary.completed, tone: 'text-emerald-600 bg-emerald-50 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20' },
+    ];
+
+    return (
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2">
+            {items.map(item => (
+                <div key={item.label} className={`rounded-xl border px-3 py-2 ${item.tone}`}>
+                    <div className="text-[11px] font-bold opacity-70">{item.label}</div>
+                    <div className="text-xl font-black leading-tight">{item.value}</div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+const RetainerStatusChips: React.FC<{
+    value: string;
+    onChange: (status: string) => void;
+}> = ({ value, onChange }) => {
+    const options = [
+        { value: 'All', label: 'All' },
+        { value: 'LATE', label: 'Late' },
+        { value: 'Pending', label: 'Pending' },
+        { value: 'Filed', label: 'Filed' }
+    ];
+
+    return (
+        <div className="flex items-center gap-1 bg-neutral-light/50 dark:bg-gray-900 rounded-lg p-1 shrink-0 border border-neutral-medium/40 dark:border-gray-700/70">
+            {options.map(option => (
+                <button
+                    key={option.value}
+                    onClick={() => onChange(option.value)}
+                    className={`px-3 py-1.5 rounded-md text-[11px] font-bold transition-all ${value === option.value
+                            ? 'bg-white dark:bg-gray-700 text-primary shadow-sm ring-1 ring-primary/15'
+                            : 'text-secondary dark:text-gray-400 hover:text-neutral-dark dark:hover:text-white hover:bg-white/50 dark:hover:bg-gray-800'
+                        }`}
+                >
+                    {option.label}
+                </button>
+            ))}
+        </div>
+    );
+};
+
+const SpecialStatusChips: React.FC<{
+    value: string;
+    onChange: (status: string) => void;
+}> = ({ value, onChange }) => {
+    const options = [
+        { value: 'All', label: 'All' },
+        { value: 'Overdue', label: 'Overdue' },
+        { value: 'Blocked', label: 'Blocked' },
+        { value: 'In Progress', label: 'In Progress' },
+        { value: 'Planning', label: 'Planning' },
+        { value: 'Completed', label: 'Completed' },
+    ];
+
+    return (
+        <div className="flex items-center gap-1 bg-neutral-light/50 dark:bg-gray-900 rounded-lg p-1 shrink-0 border border-neutral-medium/40 dark:border-gray-700/70">
+            {options.map(option => (
+                <button
+                    key={option.value}
+                    onClick={() => onChange(option.value)}
+                    className={`px-3 py-1.5 rounded-md text-[11px] font-bold transition-all ${value === option.value
+                            ? 'bg-white dark:bg-gray-700 text-primary shadow-sm ring-1 ring-primary/15'
+                            : 'text-secondary dark:text-gray-400 hover:text-neutral-dark dark:hover:text-white hover:bg-white/50 dark:hover:bg-gray-800'
+                        }`}
+                >
+                    {option.label}
+                </button>
+            ))}
+        </div>
+    );
+};
+
+const RetainerGroupChips: React.FC<{
+    value: string;
+    onChange: (val: any) => void;
+    userRole?: string;
+}> = ({ value, onChange, userRole }) => {
+    const showStaffOption = userRole !== UserRole.STAFF;
+    const options = [
+        ...(showStaffOption ? [{ value: 'Staff', label: 'Staff' }] : []),
+        { value: 'Client', label: 'Client' },
+        { value: 'Compliance', label: 'Compliance' },
+        { value: 'None', label: 'None' }
+    ];
+
+    return (
+        <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[11px] font-bold text-secondary dark:text-gray-400 hidden sm:block">Group by</span>
+            <div className="flex items-center gap-1 bg-neutral-light/50 dark:bg-gray-900 rounded-lg p-1 border border-neutral-medium/40 dark:border-gray-700/70">
+                {options.map(option => (
+                    <button
+                        key={option.value}
+                        onClick={() => onChange(option.value)}
+                        className={`px-3 py-1.5 rounded-md text-[11px] font-bold transition-all ${value === option.value
+                                ? 'bg-white dark:bg-gray-700 text-primary shadow-sm ring-1 ring-primary/15'
+                                : 'text-secondary dark:text-gray-400 hover:text-neutral-dark dark:hover:text-white hover:bg-white/50 dark:hover:bg-gray-800'
+                            }`}
+                    >
+                        {option.label}
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const SpecialGroupChips: React.FC<{
+    value: string;
+    onChange: (val: any) => void;
+    userRole?: string;
+}> = ({ value, onChange, userRole }) => {
+    const showStaffOption = userRole !== UserRole.STAFF;
+    const options = [
+        ...(showStaffOption ? [{ value: 'Staff', label: 'Staff' }] : []),
+        { value: 'Client', label: 'Client' },
+        { value: 'Status', label: 'Status' },
+        { value: 'None', label: 'None' }
+    ];
+
+    return (
+        <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[11px] font-bold text-secondary dark:text-gray-400 hidden sm:block">Group by</span>
+            <div className="flex items-center gap-1 bg-neutral-light/50 dark:bg-gray-900 rounded-lg p-1 border border-neutral-medium/40 dark:border-gray-700/70">
+                {options.map(option => (
+                    <button
+                        key={option.value}
+                        onClick={() => onChange(option.value)}
+                        className={`px-3 py-1.5 rounded-md text-[11px] font-bold transition-all ${value === option.value
+                                ? 'bg-white dark:bg-gray-700 text-primary shadow-sm ring-1 ring-primary/15'
+                                : 'text-secondary dark:text-gray-400 hover:text-neutral-dark dark:hover:text-white hover:bg-white/50 dark:hover:bg-gray-800'
+                            }`}
+                    >
+                        {option.label}
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+};
 
 const GroupBySelect: React.FC<{
     value: string;

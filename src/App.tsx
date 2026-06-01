@@ -30,6 +30,8 @@ export const AppContext = createContext<AppContextType | null>(null);
 
 const RootRedirect: React.FC = () => {
   const startTab = localStorage.getItem('startTab') || 'dashboard';
+  if (startTab === 'engagements') return <Navigate to="/retainers" replace />;
+  if (startTab === 'operations') return <Navigate to="/transmittals" replace />;
   return <Navigate to={`/${startTab}`} replace />;
 };
 
@@ -218,8 +220,12 @@ const App: React.FC = () => {
                   <Route path="/" element={user ? <RootRedirect /> : <Navigate to="/login" />} />
                   <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/login" />} />
                   <Route path="/clients" element={user ? <Clients /> : <Navigate to="/login" />} />
-                  <Route path="/engagements" element={user ? <Engagements /> : <Navigate to="/login" />} />
-                  <Route path="/operations" element={user ? <Operations /> : <Navigate to="/login" />} />
+                  <Route path="/engagements" element={user ? <Navigate to="/retainers" replace /> : <Navigate to="/login" />} />
+                  <Route path="/retainers" element={user ? <Engagements /> : <Navigate to="/login" />} />
+                  <Route path="/special-projects" element={user ? <Engagements /> : <Navigate to="/login" />} />
+                  <Route path="/operations" element={user ? <Navigate to="/transmittals" replace /> : <Navigate to="/login" />} />
+                  <Route path="/transmittals" element={user ? <Operations /> : <Navigate to="/login" />} />
+                  <Route path="/meetings" element={user ? <Operations /> : <Navigate to="/login" />} />
                   <Route path="/reports" element={user ? (user.role === 'Admin' ? <Reports /> : <Navigate to="/" />) : <Navigate to="/login" />} />
                   <Route path="/settings" element={user ? <Settings /> : <Navigate to="/login" />} />
                 </Routes>

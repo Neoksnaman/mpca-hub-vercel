@@ -1,17 +1,16 @@
-import React, { useContext, useMemo } from 'react';
+import React, { useContext, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AppContext } from '../App';
 import { 
     CheckCircle, 
     Briefcase, 
-    FileText, 
     AlertTriangle, 
     TrendingUp, 
     Users, 
-    Clock, 
-    ArrowUpRight,
     Building2,
-    Calendar
+    Calendar,
+    ChevronLeft,
+    ChevronRight
 } from 'lucide-react';
 import { 
     BarChart, 
@@ -20,16 +19,11 @@ import {
     YAxis, 
     CartesianGrid, 
     Tooltip, 
-    Legend, 
     ResponsiveContainer,
-    PieChart,
-    Pie,
     Cell,
     LabelList,
-    AreaChart,
-    Area
 } from 'recharts';
-import { UserRole } from '../types';
+import { Client, ProjectTask, RetainerEngagement, SpecialEngagement, UserRole } from '../types';
 
 const normalizeId = (id: any) => String(id || '').trim().replace(/^0+/, '') || '0';
 
@@ -87,10 +81,49 @@ const Dashboard: React.FC = () => {
     const retainerLogs = context?.retainerLogs || [];
     const allUsers = context?.allUsers || [];
 
-    const currentMonth = new Date(new Date().setMonth(new Date().getMonth() - 1)).toLocaleString('default', { month: 'long' });
-    const currentYear = String(new Date().getFullYear());
+    const [selectedPeriod, setSelectedPeriod] = useState(() => {
+        const date = new Date();
+        date.setMonth(date.getMonth() - 1);
+        date.setDate(1);
+        date.setHours(12, 0, 0, 0);
+        return date;
+    });
+    const currentMonth = selectedPeriod.toLocaleString('default', { month: 'long' });
+    const currentYear = String(selectedPeriod.getFullYear());
+
+    const shiftPeriod = (monthDelta: number) => {
+        setSelectedPeriod(prev => {
+            const next = new Date(prev);
+            next.setMonth(next.getMonth() + monthDelta);
+            next.setDate(1);
+            next.setHours(12, 0, 0, 0);
+            return next;
+        });
+    };
+
+    const resetPeriod = () => {
+        const date = new Date();
+        date.setMonth(date.getMonth() - 1);
+        date.setDate(1);
+        date.setHours(12, 0, 0, 0);
+        setSelectedPeriod(date);
+    };
 
     const dashboardData = useMemo(() => {
+        const userByKey = new Map<string, any>();
+        allUsers.forEach(u => {
+            userByKey.set(String(u.id), u);
+            userByKey.set(u.firstName, u);
+            userByKey.set(`${u.firstName} ${u.lastName}`, u);
+        });
+        const retainerById = new Map<string, RetainerEngagement>(retainers.map(r => [normalizeId(r.id), r]));
+        const clientById = new Map<string, Client>(clients.map(c => [normalizeId(c.id), c]));
+        const retainerLogsByDeadlinePeriod = new Map(retainerLogs.map(l => [`${normalizeId(l[0])}|${l[1]}`, l]));
+        const taskById = new Map<string, ProjectTask>((context?.taskLog || []).map(t => [normalizeId(t.taskID), t]));
+        const specialById = new Map<string, SpecialEngagement>(specials.map(s => [normalizeId(s.id), s]));
+        const taxById = new Map<string, any>((context?.taxCompliances || []).map((t: any) => [normalizeId(t.taxID), t]));
+        const serviceById = new Map<string, any>((context?.services || []).map((s: any) => [normalizeId(s.id), s]));
+
         // Filter helper for RBAC
         const isVisible = (assignedStaffStr: string | undefined) => {
             if (!user) return false;
@@ -100,11 +133,7 @@ const Dashboard: React.FC = () => {
 
             const staffNames = assignedStaffStr.split(',').map(s => s.trim());
             return staffNames.some(staffName => {
-                const staffUser = allUsers.find(u => 
-                    u.id === staffName || 
-                    `${u.firstName} ${u.lastName}` === staffName || 
-                    u.firstName === staffName
-                );
+                const staffUser = userByKey.get(staffName);
                 if (!staffUser) return false;
 
                 // Seniors see their team
@@ -118,13 +147,13 @@ const Dashboard: React.FC = () => {
         };
 
         const activeInstances = deadlines.map(d => {
-            const retainer = retainers.find(r => normalizeId(r.id) === normalizeId(d.retainerID));
+            const retainer = retainerById.get(normalizeId(d.retainerID));
             if (!retainer || retainer.engagementStatus === 'Inactive') return null;
 
             // RBAC Check
             if (!isVisible(retainer.assignedStaff)) return null;
 
-            const client = clients.find(c => normalizeId(c.id) === normalizeId(retainer.clientId));
+            const client = clientById.get(normalizeId(retainer.clientId));
             if (!client || client.status === 'Inactive') return null;
             
             const frequency = d.dueDate.startsWith('M') ? 'Monthly' : d.dueDate.startsWith('Q') ? 'Quarterly' : (d.dueDate.startsWith('Y') || d.dueDate.startsWith('A')) ? 'Annual' : 'Monthly';
@@ -141,7 +170,7 @@ const Dashboard: React.FC = () => {
             if (['1', '2'].includes(normalizeId(d.taxID)) && [3, 6, 9, 12].includes(monthIdx)) return null;
 
             const periodKey = `${String(monthIdx).padStart(2, '0')}/${currentYear}`;
-            const log = retainerLogs.find(l => normalizeId(l[0]) === normalizeId(d.deadlineID) && l[1] === periodKey);
+            const log = retainerLogsByDeadlinePeriod.get(`${normalizeId(d.deadlineID)}|${periodKey}`);
             const dueInfo = computeActualDueDate(currentMonth, currentYear, d.dueDate, isCalendarOnly ? '12/31' : (client?.fiscalYearEnd || '12/31'));
 
             let status = 'Pending';
@@ -153,15 +182,55 @@ const Dashboard: React.FC = () => {
                 compareDue.setHours(12, 0, 0, 0);
                 status = filedDate > compareDue ? 'LATE' : 'Filed';
             }
-            return { id: d.deadlineID, status, staff: retainer.assignedStaff };
+            const tax = d.taxID ? taxById.get(normalizeId(d.taxID)) : null;
+            const service = !d.taxID ? serviceById.get(normalizeId(d.serviceID)) : null;
+
+            return {
+                id: d.deadlineID,
+                status,
+                staff: retainer.assignedStaff,
+                clientName: client.name,
+                title: tax?.complianceName || service?.name || 'General Compliance',
+                dueDate: dueInfo.formatted,
+                rawDueDate: dueInfo.raw
+            };
         }).filter(Boolean);
 
-        const filingStats = {
-            total: activeInstances.length,
-            filed: activeInstances.filter(i => i!.status === 'Filed').length,
-            late: activeInstances.filter(i => i!.status === 'LATE').length,
-            pending: activeInstances.filter(i => i!.status === 'Pending').length
-        };
+        const filingStats = activeInstances.reduce((acc, i) => {
+            acc.total += 1;
+            if (i!.status === 'Filed') acc.filed += 1;
+            else if (i!.status === 'LATE') acc.late += 1;
+            else if (i!.status === 'Pending') acc.pending += 1;
+            return acc;
+        }, { total: 0, filed: 0, late: 0, pending: 0 });
+
+        const activeInstanceCountByStaff = new Map<string, number>();
+        activeInstances.forEach(i => {
+            if (!i) return;
+            activeInstanceCountByStaff.set(i.staff, (activeInstanceCountByStaff.get(i.staff) || 0) + 1);
+        });
+
+        const activeSpecialCountByStaff = new Map<string, number>();
+        let activeSpecialsCount = 0;
+        let blockedSpecialsCount = 0;
+        let overdueSpecialsCount = 0;
+        const today = new Date();
+        today.setHours(12, 0, 0, 0);
+        specials.forEach(s => {
+            if (!isVisible(s.assignedStaff)) return;
+            if (s.status === 'In Progress') {
+                activeSpecialsCount++;
+                activeSpecialCountByStaff.set(s.assignedStaff, (activeSpecialCountByStaff.get(s.assignedStaff) || 0) + 1);
+            } else if (s.status === 'Blocked') {
+                blockedSpecialsCount++;
+            }
+            if (s.status !== 'Completed' && s.endDate) {
+                const [m, d, y] = s.endDate.split('/');
+                const endDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+                endDate.setHours(23, 59, 59, 999);
+                if (today > endDate) overdueSpecialsCount++;
+            }
+        });
 
         const staffWorkload = allUsers.filter(u => u.status === 'Active' && u.role !== UserRole.ADMIN).filter(u => {
             // In staff view, only show themselves. In Senior view, show team.
@@ -170,35 +239,34 @@ const Dashboard: React.FC = () => {
             return true;
         }).map(u => {
             const name = `${u.firstName} ${u.lastName}`;
-            const retainerCount = activeInstances.filter(i => i!.staff === name || i!.staff === u.firstName).length;
-            const specialCount = specials.filter(s => (s.assignedStaff === name || s.assignedStaff === u.firstName) && s.status === 'In Progress').length;
+            const retainerCount = (activeInstanceCountByStaff.get(name) || 0) + (activeInstanceCountByStaff.get(u.firstName) || 0);
+            const specialCount = (activeSpecialCountByStaff.get(name) || 0) + (activeSpecialCountByStaff.get(u.firstName) || 0);
             return { name: u.firstName, engagements: retainerCount + specialCount };
         }).sort((a, b) => b.engagements - a.engagements);
 
-        // Filter clients based on visibility and retainer presence
-        const visibleRetainerClients = clients.filter(c => {
-            const hasRetainer = retainers.some(r => normalizeId(r.clientId) === normalizeId(c.id) && isVisible(r.assignedStaff));
-            if (user?.role === UserRole.ADMIN || user?.role === UserRole.MANAGER || user?.role === UserRole.SUPERVISOR) {
-                return c.status === 'Active' && retainers.some(r => normalizeId(r.clientId) === normalizeId(c.id));
-            }
-            return c.status === 'Active' && hasRetainer;
+        const visibleRetainerClientIds = new Set<string>();
+        retainers.forEach(r => {
+            if (isVisible(r.assignedStaff)) visibleRetainerClientIds.add(normalizeId(r.clientId));
+        });
+        const visibleRetainerClients = clients.filter(c => c.status === 'Active' && visibleRetainerClientIds.has(normalizeId(c.id)));
+        const entityCounts = new Map<string, number>();
+        visibleRetainerClients.forEach(c => {
+            const type = c.entityType || 'Other';
+            entityCounts.set(type, (entityCounts.get(type) || 0) + 1);
         });
 
-        const activeSpecials = specials.filter(s => s.status === 'In Progress' && isVisible(s.assignedStaff));
-        const blockedSpecials = specials.filter(s => s.status === 'Blocked' && isVisible(s.assignedStaff));
-
         // 5. Recent Activity Log (Feed)
-        const recentActivity = context?.activityLog?.map(activity => {
-            const task = context?.taskLog?.find(t => normalizeId(t.taskID) === normalizeId(activity.taskID));
+        const recentActivityRows = context?.activityLog?.map(activity => {
+            const task = taskById.get(normalizeId(activity.taskID));
             if (!task) return null;
-            const special = specials.find(s => normalizeId(s.id) === normalizeId(task.specialID));
+            const special = specialById.get(normalizeId(task.specialID));
             if (!special || !isVisible(special.assignedStaff)) return null;
 
             return {
                 id: activity.activityID,
                 date: activity.dateCompleted,
                 description: activity.description,
-                clientName: clients.find(c => normalizeId(c.id) === normalizeId(special.clientId))?.name || 'Unknown Client',
+                clientName: clientById.get(normalizeId(special.clientId))?.name || 'Unknown Client',
                 projectTitle: special.projectTitle,
                 status: special.status,
                 specialId: special.id
@@ -207,93 +275,208 @@ const Dashboard: React.FC = () => {
             const dateA = new Date(a!.date).getTime();
             const dateB = new Date(b!.date).getTime();
             return dateB - dateA;
-        }).slice(0, 5);
+        });
+
+        const activityByProject = new Map<string, any>();
+        recentActivityRows.forEach((activity: any) => {
+            const existing = activityByProject.get(activity.specialId);
+            if (!existing) {
+                activityByProject.set(activity.specialId, { ...activity, activityCount: 1 });
+            } else {
+                existing.activityCount += 1;
+            }
+        });
+        const recentActivity = Array.from(activityByProject.values()).slice(0, 5);
+
+        const lateCompliances = activeInstances.filter(i => i?.status === 'LATE').length;
+
+        const needsAttention = [
+            {
+                label: 'Late Compliances',
+                value: lateCompliances,
+                description: 'Filed after deadline or still marked late',
+                tone: 'rose',
+                icon: AlertTriangle,
+                path: '/retainers'
+            },
+            {
+                label: 'Blocked Projects',
+                value: blockedSpecialsCount,
+                description: 'Special projects that need unblock action',
+                tone: 'red',
+                icon: AlertTriangle,
+                path: '/special-projects'
+            },
+            {
+                label: 'Overdue Projects',
+                value: overdueSpecialsCount,
+                description: 'Open special projects past target date',
+                tone: 'blue',
+                icon: Briefcase,
+                path: '/special-projects'
+            }
+        ];
 
         return {
             filingStats,
             totalRetainerClients: visibleRetainerClients.length,
-            entityDistribution: Array.from(new Set(visibleRetainerClients.map(c => c.entityType))).map(type => ({
-                name: type || 'Other',
-                value: visibleRetainerClients.filter(c => c.entityType === type).length
-            })).filter(d => d.value > 0),
-            activeSpecials: activeSpecials.length,
-            blockedSpecials: blockedSpecials.length,
+            entityDistribution: Array.from(entityCounts.entries()).map(([name, value]) => ({ name, value })),
+            activeSpecials: activeSpecialsCount,
+            blockedSpecials: blockedSpecialsCount,
+            overdueSpecials: overdueSpecialsCount,
             staffWorkload,
-            recentActivity
+            recentActivity,
+            needsAttention
         };
-    }, [clients, retainers, specials, deadlines, retainerLogs, allUsers, currentMonth, currentYear, user, context?.activityLog, context?.taskLog]);
+    }, [clients, retainers, specials, deadlines, retainerLogs, allUsers, currentMonth, currentYear, user, context?.activityLog, context?.taskLog, context?.taxCompliances, context?.services]);
 
-    const COLORS = ['#B4262A', '#F9A825', '#4B4B4B', '#10B981', '#3B82F6', '#8B5CF6'];
+    const filingRate = dashboardData.filingStats.total > 0 ? Math.round((dashboardData.filingStats.filed / dashboardData.filingStats.total) * 100) : 100;
+    const topWorkload = dashboardData.staffWorkload.slice(0, 8);
+    const hiddenWorkloadCount = Math.max(0, dashboardData.staffWorkload.length - topWorkload.length);
+    const hasDashboardData = dashboardData.filingStats.total > 0 || dashboardData.staffWorkload.length > 0 || dashboardData.activeSpecials > 0;
+    const chartLoadKey = hasDashboardData ? 'ready' : 'loading';
 
     return (
-        <div className="w-full mx-auto p-2 space-y-6 animate-in fade-in duration-700">
+        <div className="w-full mx-auto p-2 space-y-3 animate-in fade-in duration-700">
             {/* Header */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2 px-1">
                 <div className="space-y-0.5">
                     <div className="flex items-center gap-2.5">
                         <div className="w-1.5 h-7 bg-primary rounded-full" />
-                        <h1 className="text-3xl font-black text-neutral-dark dark:text-white tracking-tight">Business Intelligence</h1>
+                        <h1 className="text-3xl font-black text-neutral-dark dark:text-white tracking-tight">Dashboard</h1>
                     </div>
                     <p className="text-sm text-secondary dark:text-gray-300 font-medium pl-4 opacity-70 dark:opacity-100">Performance overview for {currentMonth} {currentYear}</p>
                 </div>
-                <div className="flex items-center gap-2 bg-white/50 dark:bg-gray-800/50 backdrop-blur-md px-4 py-2 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm">
-                    <Calendar size={14} className="text-primary" />
-                    <span className="text-[11px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest">{new Date().toDateString()}</span>
+                <div className="flex items-center gap-2 bg-white dark:bg-gray-800 p-1 rounded-xl border border-neutral-medium dark:border-gray-700 shadow-sm">
+                    <button
+                        onClick={() => shiftPeriod(-1)}
+                        className="p-2 rounded-lg text-secondary hover:text-primary hover:bg-neutral-light dark:hover:bg-gray-700 transition-colors"
+                        title="Previous month"
+                    >
+                        <ChevronLeft size={16} />
+                    </button>
+                    <div className="flex items-center gap-2 px-3 py-1.5 min-w-[150px] justify-center">
+                        <Calendar size={14} className="text-primary" />
+                        <span className="text-[11px] font-black text-neutral-dark dark:text-white uppercase tracking-widest">{currentMonth} {currentYear}</span>
+                    </div>
+                    <button
+                        onClick={() => shiftPeriod(1)}
+                        className="p-2 rounded-lg text-secondary hover:text-primary hover:bg-neutral-light dark:hover:bg-gray-700 transition-colors"
+                        title="Next month"
+                    >
+                        <ChevronRight size={16} />
+                    </button>
+                    <button
+                        onClick={resetPeriod}
+                        className="px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest text-secondary hover:text-primary hover:bg-neutral-light dark:hover:bg-gray-700 transition-colors"
+                    >
+                        Latest
+                    </button>
                 </div>
             </div>
 
-            {/* Quick Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-                {[
-                    { label: 'Retainer Clients', value: dashboardData.totalRetainerClients, icon: Building2, color: 'text-blue-600', bg: 'bg-blue-500/10', path: '/clients', state: { activeTab: 'Retainer' } },
-                    { label: 'Compliance Score', value: `${dashboardData.filingStats.total > 0 ? Math.round((dashboardData.filingStats.filed / dashboardData.filingStats.total) * 100) : 100}%`, icon: TrendingUp, color: 'text-emerald-600', bg: 'bg-emerald-500/10', path: '/engagements', state: { activeTab: 'Retainer' } },
-                    { label: 'Active Projects', value: dashboardData.activeSpecials, icon: Briefcase, color: 'text-amber-600', bg: 'bg-amber-500/10', path: '/engagements', state: { activeTab: 'Special' } },
-                    { label: 'Blocked Items', value: dashboardData.blockedSpecials, icon: AlertTriangle, color: 'text-rose-600', bg: 'bg-rose-500/10', path: '/engagements', state: { activeTab: 'Special' } },
-                ].map((stat, i) => (
-                    <div 
-                        key={i} 
-                        onClick={() => stat.path && navigate(stat.path, { state: stat.state })}
-                        className={`bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-neutral-medium dark:border-gray-700 shadow-xl shadow-neutral-dark/5 group ${stat.path ? 'cursor-pointer hover:scale-[1.02]' : ''} transition-all duration-300`}
-                    >
-                        <div className="flex items-center justify-between mb-4">
-                            <div className={`p-3 ${stat.bg} ${stat.color} rounded-2xl transition-transform group-hover:rotate-12`}>
-                                <stat.icon size={24} />
-                            </div>
-                            <ArrowUpRight size={20} className="text-secondary/20 dark:text-white/20 group-hover:text-primary transition-colors" />
-                        </div>
-                        <h3 className="text-sm font-black text-secondary dark:text-gray-300 uppercase tracking-widest opacity-60 dark:opacity-100 mb-1">{stat.label}</h3>
-                        <p className="text-3xl font-black text-neutral-dark dark:text-white tracking-tighter">{stat.value}</p>
+            {/* Snapshot and Needs Attention */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                <div className="bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-neutral-medium/60 dark:border-gray-700">
+                        <h3 className="text-sm font-black text-neutral-dark dark:text-white">Snapshot</h3>
+                        <p className="text-[11px] font-bold text-secondary/70 dark:text-gray-400">Monthly operating overview</p>
                     </div>
-                ))}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-neutral-medium/50 dark:divide-gray-700">
+                        {[
+                            { label: 'Retainer Clients', value: dashboardData.totalRetainerClients, helper: 'Active retainers', icon: Building2, color: 'text-blue-600', bg: 'bg-blue-500/10', path: '/clients', state: { activeTab: 'Retainer' } },
+                            { label: 'Filed Rate', value: `${filingRate}%`, helper: `${dashboardData.filingStats.filed}/${dashboardData.filingStats.total} filed`, icon: TrendingUp, color: 'text-emerald-600', bg: 'bg-emerald-500/10', path: '/retainers' },
+                            { label: 'Active Projects', value: dashboardData.activeSpecials, helper: 'In progress', icon: Briefcase, color: 'text-amber-600', bg: 'bg-amber-500/10', path: '/special-projects' },
+                        ].map((stat: any) => (
+                            <button
+                                key={stat.label}
+                                onClick={() => stat.path && navigate(stat.path, { state: stat.state })}
+                                className={`text-left p-3 group ${stat.path ? 'cursor-pointer hover:bg-neutral-light/50 dark:hover:bg-gray-900/40' : 'cursor-default'} transition-colors`}
+                            >
+                                <div className="flex items-start justify-between gap-2">
+                                    <div>
+                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest">{stat.label}</p>
+                                        <p className="text-2xl font-black text-neutral-dark dark:text-white mt-1 leading-none">{stat.value}</p>
+                                    </div>
+                                    <div className={`p-2 rounded-xl ${stat.bg} ${stat.color}`}>
+                                        <stat.icon size={15} />
+                                    </div>
+                                </div>
+                                <p className="text-[10px] font-bold text-secondary/70 dark:text-gray-400 mt-2 leading-snug">{stat.helper}</p>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-neutral-medium/60 dark:border-gray-700 flex items-center justify-between">
+                        <div>
+                            <h3 className="text-sm font-black text-neutral-dark dark:text-white">Needs Attention</h3>
+                            <p className="text-[11px] font-bold text-secondary/70 dark:text-gray-400">Items that may need action before routine reporting</p>
+                        </div>
+                        <AlertTriangle size={18} className="text-primary/60" />
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-neutral-medium/50 dark:divide-gray-700">
+                        {dashboardData.needsAttention.map((item: any) => {
+                            const shortLabel = item.label.replace(' Compliances', '').replace(' Projects', '');
+                            const helper = item.value === 0
+                                ? 'Clear this month'
+                                : item.label === 'Late Compliances'
+                                    ? 'Past deadline'
+                                    : item.label === 'Blocked Projects'
+                                        ? 'Needs unblock action'
+                                        : 'Past target date';
+                            const Icon = item.value === 0 ? CheckCircle : item.icon;
+                            const tone = item.value === 0
+                                ? 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
+                                : item.tone === 'rose'
+                                    ? 'bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20'
+                                    : item.tone === 'blue'
+                                        ? 'bg-blue-50 text-blue-600 border-blue-100 dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/20'
+                                        : 'bg-red-50 text-red-600 border-red-100 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/20';
+
+                            return (
+                                <button
+                                    key={item.label}
+                                    onClick={() => navigate(item.path)}
+                                    className="text-left p-3 hover:bg-neutral-light/50 dark:hover:bg-gray-900/40 transition-colors group"
+                                >
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div>
+                                            <p className="text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest">{shortLabel}</p>
+                                            <p className="text-2xl font-black text-neutral-dark dark:text-white mt-1 leading-none">{item.value}</p>
+                                        </div>
+                                        <div className={`p-2 rounded-xl border ${tone}`}>
+                                            <Icon size={15} />
+                                        </div>
+                                    </div>
+                                    <p className="text-[10px] font-bold text-secondary/70 dark:text-gray-400 mt-2 leading-snug">{helper}</p>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
             </div>
 
             {/* Charts & Resources Row */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 {/* Filing Distribution Chart */}
-                <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl shadow-neutral-dark/5">
-                    <div className="flex items-center justify-between mb-8">
+                <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5">
+                    <div className="flex items-center justify-between mb-5">
                         <div className="space-y-1">
-                            <h3 className="text-lg font-black text-neutral-dark dark:text-white tracking-tight">Compliance Health</h3>
-                            <p className="text-xs text-secondary dark:text-gray-400 font-medium opacity-100">Monthly filing status breakdown</p>
+                            <h3 className="text-base font-black text-neutral-dark dark:text-white tracking-tight">Compliance Health</h3>
+                            <p className="text-xs text-secondary dark:text-gray-400 font-medium opacity-100">
+                                {dashboardData.filingStats.filed} filed, {dashboardData.filingStats.pending} pending, {dashboardData.filingStats.late} late
+                            </p>
                         </div>
-                        <div className="flex gap-4">
-                            <div className="flex items-center gap-1.5">
-                                <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                                <span className="text-[10px] font-black text-secondary dark:text-gray-400 uppercase">Filed</span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                                <div className="w-2 h-2 rounded-full bg-amber-500" />
-                                <span className="text-[10px] font-black text-secondary dark:text-gray-400 uppercase">Pending</span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                                <div className="w-2 h-2 rounded-full bg-rose-500" />
-                                <span className="text-[10px] font-black text-secondary dark:text-gray-400 uppercase">Late</span>
-                            </div>
+                        <div className="text-right">
+                            <p className="text-2xl font-black text-neutral-dark dark:text-white leading-none">{filingRate}%</p>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-secondary dark:text-gray-400 mt-1">Filed Rate</p>
                         </div>
                     </div>
-                    <div className="h-[300px] w-full">
+                    <div className="h-[260px] w-full">
                         <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={[
+                            <BarChart key={`compliance-${chartLoadKey}`} data={[
                                 { name: 'Filed', count: dashboardData.filingStats.filed, color: '#10B981' },
                                 { name: 'Pending', count: dashboardData.filingStats.pending, color: '#F59E0B' },
                                 { name: 'Late', count: dashboardData.filingStats.late, color: '#EF4444' }
@@ -323,20 +506,23 @@ const Dashboard: React.FC = () => {
                 </div>
 
                 {/* Resource Management Chart */}
-                <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] border border-neutral-medium dark:border-gray-700 shadow-2xl shadow-neutral-dark/5">
-                    <div className="flex items-center justify-between mb-8 px-2">
+                <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5">
+                    <div className="flex items-center justify-between mb-5 px-1">
                         <div className="space-y-1">
-                            <h3 className="text-lg font-black text-neutral-dark dark:text-white tracking-tight">Resource Management</h3>
-                            <p className="text-xs text-secondary dark:text-gray-400 font-medium opacity-100">Active engagement load per staff</p>
+                            <h3 className="text-base font-black text-neutral-dark dark:text-white tracking-tight">Resource Management</h3>
+                            <p className="text-xs text-secondary dark:text-gray-400 font-medium opacity-100">
+                                Top workload this month{hiddenWorkloadCount > 0 ? `, ${hiddenWorkloadCount} more in reports` : ''}
+                            </p>
                         </div>
                         <Users size={20} className="text-primary opacity-50" />
                     </div>
-                    <div className="overflow-y-auto pr-2 custom-scrollbar" style={{ height: '300px' }}>
-                        <ResponsiveContainer width="100%" height={Math.max(300, dashboardData.staffWorkload.length * 30)}>
+                    <div style={{ height: '300px' }}>
+                        <ResponsiveContainer width="100%" height="100%">
                             <BarChart 
+                                key={`workload-${chartLoadKey}`}
                                 layout="vertical" 
-                                data={dashboardData.staffWorkload}
-                                margin={{ left: 0, right: 30, top: 0, bottom: 10 }}
+                                data={topWorkload}
+                                margin={{ left: 0, right: 42, top: 0, bottom: 10 }}
                             >
                                 <defs>
                                     <linearGradient id="lowLoad" x1="0" y1="0" x2="1" y2="0">
@@ -387,7 +573,8 @@ const Dashboard: React.FC = () => {
                                     barSize={12}
                                     animationDuration={1000}
                                 >
-                                    {dashboardData.staffWorkload.map((entry, index) => {
+                                    <LabelList dataKey="engagements" position="right" className="text-[10px] font-black fill-secondary dark:fill-gray-300" />
+                                    {topWorkload.map((entry, index) => {
                                         let gradientId = "lowLoad";
                                         if (entry.engagements > 12) gradientId = "highLoad";
                                         else if (entry.engagements > 6) gradientId = "medLoad";
@@ -401,45 +588,52 @@ const Dashboard: React.FC = () => {
             </div>
 
             {/* Full Width Activity Log */}
-            <div className="bg-white dark:bg-gray-800 p-10 rounded-[3rem] border border-neutral-medium dark:border-gray-700 shadow-2xl shadow-neutral-dark/5">
-                <div className="flex items-center justify-between mb-10">
+            <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5">
+                <div className="flex items-center justify-between mb-4">
                     <div className="space-y-1">
-                        <h3 className="text-xl font-black text-neutral-dark dark:text-white tracking-tight">Activity Log</h3>
-                        <p className="text-sm text-secondary dark:text-gray-300 font-medium opacity-100">Real-time progress feed from Special Projects</p>
+                        <h3 className="text-base font-black text-neutral-dark dark:text-white tracking-tight">Recent Project Updates</h3>
+                        <p className="text-xs text-secondary dark:text-gray-300 font-medium opacity-100">Latest progress grouped by Special Project</p>
                     </div>
                     <div className="flex items-center gap-4">
-                         <button onClick={() => navigate('/engagements', { state: { activeTab: 'Special' } })} className="px-6 py-2 bg-neutral-light dark:bg-gray-900 rounded-xl text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest hover:bg-primary hover:text-white transition-all">
-                            View Historical Logs
+                         <button onClick={() => navigate('/special-projects')} className="px-3 py-2 bg-neutral-light dark:bg-gray-900 rounded-xl text-[10px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest hover:bg-primary hover:text-white transition-all">
+                            View All
                         </button>
                     </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-8">
+                <div className="divide-y divide-neutral-medium/50 dark:divide-gray-700">
                     {dashboardData.recentActivity.length > 0 ? (
                         dashboardData.recentActivity.map((activity: any, i) => (
                             <div 
                                 key={i} 
-                                onClick={() => navigate('/engagements', { state: { activeTab: 'Special', specialId: activity.specialId } })}
-                                className="flex gap-6 group relative p-3 -m-3 rounded-2xl cursor-pointer hover:bg-neutral-light/50 dark:hover:bg-gray-700/50 transition-colors"
+                                onClick={() => navigate('/special-projects', { state: { specialId: activity.specialId } })}
+                                className="flex gap-3 group relative py-3 cursor-pointer hover:bg-neutral-light/50 dark:hover:bg-gray-700/50 transition-colors"
                             >
                                 <div className="relative z-10">
-                                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg transition-transform group-hover:scale-110 ${
+                                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center transition-transform group-hover:scale-105 ${
                                         activity.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-600' :
                                         activity.status === 'Blocked' ? 'bg-rose-500/10 text-rose-600' :
                                         'bg-blue-500/10 text-blue-600'
                                     }`}>
-                                        <Briefcase size={22} />
+                                        <Briefcase size={17} />
                                     </div>
                                 </div>
-                                <div className="flex-1 min-w-0 py-1">
+                                <div className="flex-1 min-w-0">
                                     <div className="flex items-center justify-between gap-2 mb-1">
-                                        <h4 className="text-sm font-black text-neutral-dark dark:text-white uppercase truncate tracking-tight">{activity.projectTitle}</h4>
-                                        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-neutral-light dark:bg-gray-700 rounded-md">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <h4 className="text-sm font-black text-neutral-dark dark:text-white truncate tracking-tight">{activity.projectTitle}</h4>
+                                            {activity.activityCount > 1 && (
+                                                <span className="shrink-0 px-2 py-0.5 rounded-full bg-primary/5 border border-primary/10 text-[8px] font-black uppercase tracking-widest text-primary">
+                                                    {activity.activityCount} updates
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-neutral-light dark:bg-gray-700 rounded-md shrink-0">
                                             <Calendar size={10} className="text-secondary dark:text-gray-400" />
                                             <span className="text-[9px] font-black text-secondary dark:text-gray-300 uppercase tracking-tighter opacity-100">{activity.date}</span>
                                         </div>
                                     </div>
-                                    <p className="text-xs font-bold text-secondary dark:text-gray-400 mb-3 leading-relaxed">{activity.description}</p>
+                                    <p className="text-xs font-bold text-secondary dark:text-gray-400 mb-2 leading-relaxed line-clamp-2">{activity.description}</p>
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-2">
                                             <Building2 size={12} className="text-primary opacity-40" />
@@ -457,7 +651,7 @@ const Dashboard: React.FC = () => {
                             </div>
                         ))
                     ) : (
-                        <div className="col-span-2 text-center py-20 opacity-30 italic text-lg">No recent activity found</div>
+                        <div className="text-center py-10 opacity-30 italic text-sm">No recent activity found</div>
                     )}
                 </div>
             </div>

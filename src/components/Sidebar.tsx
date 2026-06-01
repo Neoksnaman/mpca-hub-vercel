@@ -1,8 +1,8 @@
 
 import React, { useContext } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { NAV_LINKS } from '../constants';
-import { X, LogOut } from 'lucide-react';
+import { ChevronRight, X, LogOut } from 'lucide-react';
 import { AppContext } from '../App';
 
 interface SidebarProps {
@@ -12,6 +12,7 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
   const context = useContext(AppContext);
+  const location = useLocation();
 
   return (
     <>
@@ -53,24 +54,63 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
               return context?.user?.role === 'Admin';
             }
             return true;
-          }).map((link) => (
-            <NavLink
-              key={link.name}
-              to={link.path}
-              className={({ isActive }) =>
-                `flex items-center p-2 rounded-lg transition-colors duration-200 ${
-                  isActive
-                    ? 'bg-primary-dark'
-                    : 'hover:bg-primary-dark/50'
-                } ${isOpen ? 'justify-start' : 'md:justify-center'}`
-              }
-              title={isOpen ? '' : link.name}
-            >
-              <link.icon size={20} />
-              <span className={`ml-4 ${isOpen ? 'opacity-100' : 'opacity-0 md:hidden'}`}>
-                {link.name}
-              </span>
-            </NavLink>
+          }).map((link: any) => (
+            <div key={link.name}>
+              {link.children ? (
+                <>
+                  <NavLink
+                    to={link.path}
+                    className={({ isActive }) =>
+                      `flex items-center p-2 rounded-lg transition-colors duration-200 ${
+                        isActive || link.children.some((child: any) => location.pathname === child.path)
+                          ? 'bg-primary-dark'
+                          : 'hover:bg-primary-dark/50'
+                      } ${isOpen ? 'justify-start' : 'md:justify-center'}`
+                    }
+                    title={isOpen ? '' : link.name}
+                  >
+                    <link.icon size={20} />
+                    <span className={`ml-4 flex-1 ${isOpen ? 'opacity-100' : 'opacity-0 md:hidden'}`}>
+                      {link.name}
+                    </span>
+                    {isOpen && <ChevronRight size={14} className="text-white/60 rotate-90" />}
+                  </NavLink>
+                  <div className={`${isOpen ? 'ml-7 mt-1 space-y-1' : 'hidden'}`}>
+                    {link.children.map((child: any) => (
+                      <NavLink
+                        key={child.name}
+                        to={child.path}
+                        className={({ isActive }) =>
+                          `flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors duration-200 ${
+                            isActive ? 'bg-white/15 text-white' : 'text-white/70 hover:bg-primary-dark/40 hover:text-white'
+                          }`
+                        }
+                      >
+                        <child.icon size={15} />
+                        <span>{child.name}</span>
+                      </NavLink>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <NavLink
+                  to={link.path}
+                  className={({ isActive }) =>
+                    `flex items-center p-2 rounded-lg transition-colors duration-200 ${
+                      isActive
+                        ? 'bg-primary-dark'
+                        : 'hover:bg-primary-dark/50'
+                    } ${isOpen ? 'justify-start' : 'md:justify-center'}`
+                  }
+                  title={isOpen ? '' : link.name}
+                >
+                  <link.icon size={20} />
+                  <span className={`ml-4 ${isOpen ? 'opacity-100' : 'opacity-0 md:hidden'}`}>
+                    {link.name}
+                  </span>
+                </NavLink>
+              )}
+            </div>
           ))}
         </nav>
 
