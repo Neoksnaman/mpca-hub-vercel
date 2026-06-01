@@ -10,7 +10,7 @@ import multer from 'multer';
 import { Readable } from 'stream';
 import os from 'os';
 import bcrypt from 'bcryptjs';
-import { getMongoDb } from './mongo';
+import { MongoClient } from 'mongodb';
 
 const app = express();
 
@@ -23,6 +23,7 @@ const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN;
 const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
 const ROOT_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
+const MONGODB_URI = process.env.MONGODB_URI;
 
 const auth = new OAuth2Client(CLIENT_ID, CLIENT_SECRET);
 if (REFRESH_TOKEN) {
@@ -31,6 +32,24 @@ if (REFRESH_TOKEN) {
 
 const sheets = google.sheets({ version: 'v4', auth });
 const drive = google.drive({ version: 'v3', auth });
+
+let mongoClientPromise: Promise<MongoClient> | null = null;
+
+async function getMongoDb() {
+  if (!MONGODB_URI) {
+    throw new Error('MONGODB_URI is not configured');
+  }
+
+  if (!mongoClientPromise) {
+    const client = new MongoClient(MONGODB_URI, {
+      serverSelectionTimeoutMS: 10000,
+    });
+    mongoClientPromise = client.connect();
+  }
+
+  const client = await mongoClientPromise;
+  return client.db('mpca_app');
+}
 
 app.get('/api/mongo-health', async (req, res) => {
   try {
