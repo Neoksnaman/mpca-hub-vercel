@@ -19,14 +19,14 @@ const TaxComplianceRows = ({
     updateAssignment,
     context,
     targetClientId,
-    retainers
+    existingTaxIds
 }: {
     key?: React.Key,
     assignment: any,
     updateAssignment: (id: string, updates: any) => void,
     context: any,
     targetClientId: string,
-    retainers: any[]
+    existingTaxIds: Set<string>
 }) => {
     return (
         <div className="mt-3 p-4 bg-neutral-light/45 dark:bg-gray-900/50 border border-neutral-medium/60 dark:border-gray-700 rounded-xl space-y-3">
@@ -59,16 +59,9 @@ const TaxComplianceRows = ({
                     const masterTax = availableTaxesMaster.find((tc: any) => tc.taxID === selectedTax.taxID);
                     const pickedTaxIds = (assignment.selectedTaxes || []).map((st: any) => st.taxID).filter((id: any) => id && id !== selectedTax.taxID);
 
-                    const existingTaxIds = (context?.deadlines || [])
-                        .filter((d: any) => {
-                            const parentRetainer = retainers.find(r => normalizeId(r.id) === normalizeId(d.retainerID));
-                            return parentRetainer && normalizeId(parentRetainer.clientId) === targetClientId && d.serviceID === '0001';
-                        })
-                        .map((d: any) => d.taxID);
-
                     const availableTaxes = availableTaxesMaster.filter((tc: any) =>
                         !pickedTaxIds.includes(tc.taxID) &&
-                        (!existingTaxIds.includes(tc.taxID) || tc.taxID === selectedTax.taxID)
+                        (!existingTaxIds.has(tc.taxID) || tc.taxID === selectedTax.taxID)
                     );
 
                     const parts = selectedTax.dueDateCode.split('+');
@@ -241,6 +234,21 @@ const ServiceAssignmentBox = ({
         .map(r => String(r.serviceType || '').trim());
 
     const selectedIds = assignments.map(a => a.serviceId).filter(id => id && id !== assignment.serviceId);
+    const targetClientRetainerIds = useMemo(() => new Set(
+        retainers
+            .filter(r => normalizeId(r.clientId) === targetClientId)
+            .map(r => normalizeId(r.id))
+    ), [retainers, targetClientId]);
+    const existingTaxIds = useMemo(() => new Set(
+        (context?.deadlines || [])
+            .filter((d: any) =>
+                targetClientRetainerIds.has(normalizeId(d.retainerID)) &&
+                normalizeId(d.serviceID) === '1'
+            )
+            .map((d: any) => d.taxID)
+            .filter(Boolean)
+    ), [context?.deadlines, targetClientRetainerIds]);
+    const isTaxService = normalizeId(assignment.serviceId) === '1';
 
     const availableServices = (context?.services || [])
         .filter((s: any) => {
@@ -323,7 +331,7 @@ const ServiceAssignmentBox = ({
                     />
                 </div>
 
-                {assignment.serviceId && assignment.serviceId !== '0001' && (
+                {assignment.serviceId && !isTaxService && (
                     <div className="col-span-full mt-1 p-4 bg-neutral-light/45 dark:bg-gray-900/50 border border-neutral-medium/60 dark:border-gray-700 rounded-xl space-y-3">
                         <div className="flex items-center gap-2 mb-1">
                             <Calendar size={12} className="text-primary" />
@@ -370,13 +378,13 @@ const ServiceAssignmentBox = ({
                 )}
             </div>
 
-            {assignment.serviceId === '0001' && (
+            {isTaxService && (
                 <TaxComplianceRows
                     assignment={assignment}
                     updateAssignment={updateAssignment}
                     context={context}
                     targetClientId={targetClientId}
-                    retainers={retainers}
+                    existingTaxIds={existingTaxIds}
                 />
             )}
         </div>
