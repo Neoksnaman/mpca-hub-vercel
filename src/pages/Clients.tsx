@@ -2070,7 +2070,16 @@ const Clients: React.FC = () => {
     const handleEditSpecial = (project: any) => {
         // Find staff and service IDs
         const staff = allUsers.find(u => `${u.firstName} ${u.lastName}` === project.assignedStaff || u.id === project.assignedStaff);
-        const service = context?.services?.find(s => s.name === project.serviceName || s.id === project.serviceType);
+        const specialServices = (context?.services || []).filter((s: any) => String(s.type || '').trim().toLowerCase() === 'special');
+        const serviceById = specialServices.find((s: any) =>
+            normalizeId(s.id) === normalizeId(project.serviceType) ||
+            String(s.id || '').trim() === String(project.serviceType || '').trim()
+        );
+        const serviceByName = specialServices.find((s: any) =>
+            String(s.name || '').trim() === String(project.serviceName || '').trim() ||
+            String(s.name || '').trim() === String(project.serviceType || '').trim()
+        );
+        const service = serviceById || serviceByName;
 
         // Helper to ensure date is in YYYY-MM-DD format for HTML date inputs without UTC shift
         const formatDateForInput = (dateStr: string) => {
