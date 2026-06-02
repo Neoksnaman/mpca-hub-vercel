@@ -1,4 +1,4 @@
-import React, { useState, useContext, useMemo, useRef } from 'react';
+import React, { useState, useContext, useMemo, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { AppContext } from '../App';
@@ -15,6 +15,7 @@ import {
     Trash2,
     ExternalLink,
     ChevronDown,
+    ChevronRight,
     Check,
     Printer,
     Pencil
@@ -32,6 +33,54 @@ const getDriveUrl = (idOrUrl: string) => {
 
 const getUserFullName = (user: any) => `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
 const sortUsersByName = (users: any[]) => [...users].sort((a, b) => getUserFullName(a).localeCompare(getUserFullName(b)));
+
+const getDateSortValue = (dateStr: string) => {
+    if (!dateStr) return 0;
+    if (dateStr.includes('/')) {
+        const [m, d, y] = dateStr.split('/').map(Number);
+        return new Date(y, m - 1, d).getTime();
+    }
+    const parsed = new Date(dateStr).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const getRefSortValue = (ref: string) => {
+    const match = String(ref || '').match(/\d+/g);
+    return match ? Number(match.join('')) : 0;
+};
+
+const TablePagination = ({ currentPage, totalPages, startIndex, itemsPerPage, totalItems, setCurrentPage }: any) => {
+    if (totalPages <= 1) return null;
+
+    return (
+        <div className="px-4 py-3 bg-white dark:bg-gray-800 border-t border-neutral-medium/50 dark:border-gray-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <p className="text-[11px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest">
+                Showing {startIndex + 1}-{Math.min(startIndex + itemsPerPage, totalItems)} of {totalItems}
+            </p>
+            <div className="flex items-center gap-2">
+                <button
+                    onClick={() => setCurrentPage((page: number) => Math.max(1, page - 1))}
+                    disabled={currentPage === 1}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[11px] font-black uppercase tracking-wider text-neutral-dark dark:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-light dark:hover:bg-gray-700 transition-colors"
+                >
+                    <ChevronRight size={14} className="rotate-180" />
+                    Prev
+                </button>
+                <span className="px-3 py-1.5 rounded-lg bg-neutral-light dark:bg-gray-900 text-[11px] font-black text-primary">
+                    {currentPage} / {totalPages}
+                </span>
+                <button
+                    onClick={() => setCurrentPage((page: number) => Math.min(totalPages, page + 1))}
+                    disabled={currentPage === totalPages}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[11px] font-black uppercase tracking-wider text-neutral-dark dark:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-neutral-light dark:hover:bg-gray-700 transition-colors"
+                >
+                    Next
+                    <ChevronRight size={14} />
+                </button>
+            </div>
+        </div>
+    );
+};
 
 const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, isDeleting }: any) => {
     if (!isOpen) return null;
@@ -137,7 +186,7 @@ const AttendeeTooltipList = ({ attendeeIds, attendeeCount, staff, showBelow }: a
             onMouseEnter={() => setIsOpen(true)}
             onMouseLeave={() => setIsOpen(false)}
         >
-            <div className="w-[30px] h-[30px] rounded-full bg-neutral-light dark:bg-gray-700 border-2 border-white dark:border-gray-800 flex items-center justify-center text-[10px] font-black text-secondary shadow-sm cursor-help transition-transform hover:scale-110">
+            <div className="w-7 h-7 rounded-full bg-neutral-light dark:bg-gray-700 border-2 border-white dark:border-gray-800 flex items-center justify-center text-[10px] font-black text-secondary shadow-sm cursor-help transition-transform hover:scale-110">
                 +{attendeeCount - 3}
             </div>
 
@@ -267,6 +316,12 @@ const Operations: React.FC = () => {
     const users = context?.users || [];
     const transmittals = context?.transmittals || [];
     const meetings = context?.meetings || [];
+    const currentUser = context?.user;
+    const canDeleteTransmittalItem = (item: any) =>
+        ['Admin', 'Manager', 'Supervisor'].includes(String(currentUser?.role || '')) ||
+        normalizeId(item?.userID) === normalizeId(currentUser?.id);
+    const canDeleteMeetingItem = () =>
+        ['Admin', 'Manager', 'Supervisor', 'Senior'].includes(String(currentUser?.role || ''));
 
     const formatDateForSheet = (dateStr: string) => {
         if (!dateStr) return '';
@@ -583,6 +638,7 @@ const Operations: React.FC = () => {
                         isEditing={isEditingTransmittal}
                         setIsEditing={setIsEditingTransmittal}
                         startEditing={startEditingTransmittal}
+                        canDeleteTransmittalItem={canDeleteTransmittalItem}
                     />
                 ) : (
                     <MeetingSection
@@ -605,6 +661,7 @@ const Operations: React.FC = () => {
                         isEditing={isEditingMeeting}
                         setIsEditing={setIsEditingMeeting}
                         startEditing={startEditingMeeting}
+                        canDeleteMeetingItem={canDeleteMeetingItem}
                     />
                 )}
             </div>
@@ -1018,11 +1075,13 @@ const FileUploadField = ({ file, url, label, onFileSelect, isUploading }: { file
 const TransmittalSection = ({
     showForm, setShowForm, data, setData, newItemText, setNewItemText, addItem, removeItem, onSubmit, isSubmitting, clients, staff, history, searchQuery, isUploadingMain, formatDateForUI,
     selectedItem, setSelectedItem, openDeleteModal,
-    isEditing, setIsEditing, startEditing
+    isEditing, setIsEditing, startEditing, canDeleteTransmittalItem
 }: any) => {
     const context = useContext(AppContext);
     const [isUploadingLocal, setIsUploadingLocal] = useState(false);
     const [selectedFileInDrawer, setSelectedFileInDrawer] = useState<File | null>(null);
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 25;
     const clientById = useMemo(() => new Map(clients.map((c: any) => [normalizeId(c.id), c])), [clients]);
     const staffById = useMemo(() => new Map(staff.map((u: any) => [normalizeId(u.id), u])), [staff]);
     const filteredHistory = useMemo(() => {
@@ -1037,8 +1096,15 @@ const TransmittalSection = ({
             return (client?.name?.toLowerCase().includes(query) ||
                    t.items?.toLowerCase().includes(query) ||
                    formatDateForUI(t.date).toLowerCase().includes(query));
-        }).reverse();
+        }).sort((a: any, b: any) => getRefSortValue(b.transmittalID) - getRefSortValue(a.transmittalID));
     }, [history, clientById, searchQuery, formatDateForUI, context?.user]);
+    const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const paginatedHistory = filteredHistory.slice(startIndex, startIndex + itemsPerPage);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [filteredHistory.length, searchQuery]);
 
     const printRef = useRef<HTMLDivElement>(null);
 
@@ -1128,7 +1194,7 @@ const TransmittalSection = ({
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-neutral-medium/30 dark:divide-gray-700/50">
-                {filteredHistory.map((t: any) => {
+                {paginatedHistory.map((t: any) => {
                                     const client = clientById.get(normalizeId(t.clientID)) as any;
                                     const staffMember = staffById.get(normalizeId(t.userID)) as any;
                                     const itemsCount = t.items?.split('||').length || 0;
@@ -1170,26 +1236,28 @@ const TransmittalSection = ({
                                                     ) : (
                                                         <div className="p-1.5 text-secondary dark:text-gray-500 opacity-20 dark:opacity-40"><ExternalLink size={14} /></div>
                                                     )}
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            openDeleteModal(
-                                                                "Delete Transmittal?",
-                                                                "Are you sure you want to delete this transmittal? This action cannot be undone.",
-                                                                async () => {
-                                                                    if (t.receiptUrl && !t.receiptUrl.startsWith('http')) {
-                                                                        await deleteFile(t.receiptUrl);
+                                                    {canDeleteTransmittalItem(t) && (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                openDeleteModal(
+                                                                    "Delete Transmittal?",
+                                                                    "Are you sure you want to delete this transmittal? This action cannot be undone.",
+                                                                    async () => {
+                                                                        if (t.receiptUrl && !t.receiptUrl.startsWith('http')) {
+                                                                            await deleteFile(t.receiptUrl);
+                                                                        }
+                                                                        await deleteTransmittal(t.transmittalID);
+                                                                        context?.refreshData();
+                                                                        context?.showToast?.('Transmittal deleted successfully', 'success');
                                                                     }
-                                                                    await deleteTransmittal(t.transmittalID);
-                                                                    context?.refreshData();
-                                                                    context?.showToast?.('Transmittal deleted successfully', 'success');
-                                                                }
-                                                            );
-                                                        }}
-                                                        className="p-1.5 text-secondary dark:text-gray-400 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
-                                                    >
-                                                        <Trash2 size={14} />
-                                                    </button>
+                                                                );
+                                                            }}
+                                                            className="p-1.5 text-secondary dark:text-gray-400 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    )}
 
                                                 </div>
                                             </td>
@@ -1199,6 +1267,14 @@ const TransmittalSection = ({
                             </tbody>
                         </table>
                     </div>
+                    <TablePagination
+                        currentPage={currentPage}
+                        totalPages={totalPages}
+                        startIndex={startIndex}
+                        itemsPerPage={itemsPerPage}
+                        totalItems={filteredHistory.length}
+                        setCurrentPage={setCurrentPage}
+                    />
                 </div>
             )}
 
@@ -1389,33 +1465,35 @@ const TransmittalSection = ({
                                                     </a>
                                                 </div>
                                             </div>
-                                            <button
-                                                onClick={() => {
-                                                    openDeleteModal(
-                                                        "Delete Attachment?",
-                                                        "Are you sure you want to remove this transmittal slip? This will permanently delete the file from Drive.",
-                                                        async () => {
-                                                            try {
-                                                                const fileId = selectedItem.receiptUrl;
-                                                                // Only try to delete from drive if it's an ID (not legacy URL)
-                                                                if (fileId && !fileId.startsWith('http')) {
-                                                                    await deleteFile(fileId);
+                                            {canDeleteTransmittalItem(selectedItem) && (
+                                                <button
+                                                    onClick={() => {
+                                                        openDeleteModal(
+                                                            "Delete Attachment?",
+                                                            "Are you sure you want to remove this transmittal slip? This will permanently delete the file from Drive.",
+                                                            async () => {
+                                                                try {
+                                                                    const fileId = selectedItem.receiptUrl;
+                                                                    // Only try to delete from drive if it's an ID (not legacy URL)
+                                                                    if (fileId && !fileId.startsWith('http')) {
+                                                                        await deleteFile(fileId);
+                                                                    }
+                                                                    await updateTransmittal(selectedItem.transmittalID, { ...selectedItem, receiptUrl: '' });
+                                                                    setSelectedItem({ ...selectedItem, receiptUrl: '' });
+                                                                    context?.showToast?.('Attachment removed successfully', 'success');
+                                                                    context?.refreshData();
+                                                                } catch (e) {
+                                                                    context?.showToast?.('Failed to delete attachment', 'error');
+                                                                    throw e;
                                                                 }
-                                                                await updateTransmittal(selectedItem.transmittalID, { ...selectedItem, receiptUrl: '' });
-                                                                setSelectedItem({ ...selectedItem, receiptUrl: '' });
-                                                                context?.showToast?.('Attachment removed successfully', 'success');
-                                                                context?.refreshData();
-                                                            } catch (e) {
-                                                                context?.showToast?.('Failed to delete attachment', 'error');
-                                                                throw e;
                                                             }
-                                                        }
-                                                    );
-                                                }}
-                                                className="p-2 text-secondary/60 hover:text-rose-500 hover:bg-rose-500/10 rounded-xl transition-all shrink-0"
-                                            >
-                                                <Trash2 size={16} />
-                                            </button>
+                                                        );
+                                                    }}
+                                                    className="p-2 text-secondary/60 hover:text-rose-500 hover:bg-rose-500/10 rounded-xl transition-all shrink-0"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            )}
                                         </div>
                                     ) : (
                                         <div className="space-y-3">
@@ -1499,11 +1577,13 @@ const TransmittalSection = ({
 const MeetingSection = ({
     showForm, setShowForm, data, setData, onSubmit, isSubmitting, staff, history, searchQuery, selectedFile, onFileSelect, isUploading, formatDateForUI,
     selectedItem, setSelectedItem, openDeleteModal,
-    isEditing, setIsEditing, startEditing
+    isEditing, setIsEditing, startEditing, canDeleteMeetingItem
 }: any) => {
     const context = useContext(AppContext);
     const [isUploadingLocal, setIsUploadingLocal] = useState(false);
     const [selectedFileInDrawer, setSelectedFileInDrawer] = useState<File | null>(null);
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 25;
     const staffById = useMemo(() => new Map(staff.map((u: any) => [normalizeId(u.id), u])), [staff]);
     const filteredHistory = useMemo(() => {
         let teamHistory = history;
@@ -1524,8 +1604,15 @@ const MeetingSection = ({
         return teamHistory.filter((m: any) => {
             return (m.subject?.toLowerCase().includes(query) ||
                    formatDateForUI(m.date).toLowerCase().includes(query));
-        }).reverse();
+        }).sort((a: any, b: any) => getDateSortValue(b.date) - getDateSortValue(a.date));
     }, [history, searchQuery, formatDateForUI, context?.user, staffById]);
+    const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const paginatedHistory = filteredHistory.slice(startIndex, startIndex + itemsPerPage);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [filteredHistory.length, searchQuery]);
 
     const allowedStaffForForm = useMemo(() => {
         const role = context?.user?.role;
@@ -1629,10 +1716,10 @@ const MeetingSection = ({
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-neutral-medium/30 dark:divide-gray-700/50">
-                                {filteredHistory.map((m: any, rowIndex: number) => {
+                                {paginatedHistory.map((m: any, rowIndex: number) => {
                                     const attendeeIds = m.userIDs?.split(',') || [];
                                     const attendeeCount = attendeeIds.length;
-                                    const showBelow = rowIndex < 2 && rowIndex < filteredHistory.length - 1;
+                                    const showBelow = rowIndex < 2 && rowIndex < paginatedHistory.length - 1;
 
                                     return (
                                         <tr
@@ -1643,12 +1730,12 @@ const MeetingSection = ({
                                             <td className="px-5 py-2.5">
                                                 <span className="text-[13px] font-black text-neutral-dark dark:text-white truncate block max-w-[200px] group-hover:text-primary transition-colors">{m.subject}</span>
                                             </td>
-                                             <td className="px-5 py-2.5">
-                                                <div className="flex -space-x-2.5">
+                                            <td className="px-5 py-2.5 align-middle">
+                                                <div className="flex items-center -space-x-2.5 min-h-[28px]">
                                                     {attendeeIds.slice(0, 3).map((id: string, idx: number) => {
                                                         const staffMember = staffById.get(normalizeId(id)) as any;
                                                         return (
-                                                            <div key={idx} className="rounded-full border-2 border-white dark:border-gray-800 shadow-sm bg-white dark:bg-gray-800">
+                                                            <div key={idx} className="w-7 h-7 rounded-full border-2 border-white dark:border-gray-800 shadow-sm bg-white dark:bg-gray-800 inline-flex items-center justify-center overflow-visible shrink-0">
                                                                 <UserHoverCard user={staffMember} fallbackName="User" size="md" />
                                                             </div>
                                                         );
@@ -1677,26 +1764,28 @@ const MeetingSection = ({
                                                     ) : (
                                                         <div className="p-1.5 text-secondary dark:text-gray-500 opacity-20 dark:opacity-40"><ExternalLink size={14} /></div>
                                                     )}
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            openDeleteModal(
-                                                                "Delete Meeting?",
-                                                                "Are you sure you want to delete this meeting? This action cannot be undone.",
-                                                                async () => {
-                                                                    if (m.momUrl && !m.momUrl.startsWith('http')) {
-                                                                        await deleteFile(m.momUrl);
+                                                    {canDeleteMeetingItem() && (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                openDeleteModal(
+                                                                    "Delete Meeting?",
+                                                                    "Are you sure you want to delete this meeting? This action cannot be undone.",
+                                                                    async () => {
+                                                                        if (m.momUrl && !m.momUrl.startsWith('http')) {
+                                                                            await deleteFile(m.momUrl);
+                                                                        }
+                                                                        await deleteMeeting(m.meetingID);
+                                                                        context?.refreshData();
+                                                                        context?.showToast?.('Meeting deleted successfully', 'success');
                                                                     }
-                                                                    await deleteMeeting(m.meetingID);
-                                                                    context?.refreshData();
-                                                                    context?.showToast?.('Meeting deleted successfully', 'success');
-                                                                }
-                                                            );
-                                                        }}
-                                                        className="p-1.5 text-secondary dark:text-gray-400 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
-                                                    >
-                                                        <Trash2 size={14} />
-                                                    </button>
+                                                                );
+                                                            }}
+                                                            className="p-1.5 text-secondary dark:text-gray-400 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    )}
 
                                                 </div>
                                             </td>
@@ -1706,6 +1795,14 @@ const MeetingSection = ({
                             </tbody>
                         </table>
                     </div>
+                    <TablePagination
+                        currentPage={currentPage}
+                        totalPages={totalPages}
+                        startIndex={startIndex}
+                        itemsPerPage={itemsPerPage}
+                        totalItems={filteredHistory.length}
+                        setCurrentPage={setCurrentPage}
+                    />
                 </div>
             )}
 
@@ -1818,32 +1915,34 @@ const MeetingSection = ({
                                                         View Meeting Minutes <ExternalLink size={12} />
                                                     </a>
                                                 </div>
-                                                 <button
-                                                    onClick={() => {
-                                                        openDeleteModal(
-                                                            "Delete Document?",
-                                                            "Are you sure you want to remove these meeting minutes? This will permanently delete the file from Drive.",
-                                                            async () => {
-                                                                try {
-                                                                    const fileId = selectedItem.momUrl;
-                                                                    if (fileId && !fileId.startsWith('http')) {
-                                                                        await deleteFile(fileId);
+                                                {canDeleteMeetingItem() && (
+                                                    <button
+                                                        onClick={() => {
+                                                            openDeleteModal(
+                                                                "Delete Document?",
+                                                                "Are you sure you want to remove these meeting minutes? This will permanently delete the file from Drive.",
+                                                                async () => {
+                                                                    try {
+                                                                        const fileId = selectedItem.momUrl;
+                                                                        if (fileId && !fileId.startsWith('http')) {
+                                                                            await deleteFile(fileId);
+                                                                        }
+                                                                        await updateMeeting(selectedItem.meetingID, { ...selectedItem, momUrl: '' });
+                                                                        setSelectedItem({ ...selectedItem, momUrl: '' });
+                                                                        context?.showToast?.('Minutes removed successfully', 'success');
+                                                                        context?.refreshData();
+                                                                    } catch (e) {
+                                                                        context?.showToast?.('Failed to delete minutes', 'error');
+                                                                        throw e;
                                                                     }
-                                                                    await updateMeeting(selectedItem.meetingID, { ...selectedItem, momUrl: '' });
-                                                                    setSelectedItem({ ...selectedItem, momUrl: '' });
-                                                                    context?.showToast?.('Minutes removed successfully', 'success');
-                                                                    context?.refreshData();
-                                                                } catch (e) {
-                                                                    context?.showToast?.('Failed to delete minutes', 'error');
-                                                                    throw e;
                                                                 }
-                                                            }
-                                                        );
-                                                    }}
-                                                    className="p-2 text-secondary/40 hover:text-rose-500 hover:bg-rose-500/10 rounded-xl transition-all"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
+                                                            );
+                                                        }}
+                                                        className="p-2 text-secondary/40 hover:text-rose-500 hover:bg-rose-500/10 rounded-xl transition-all"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                )}
                                             </div>
                                         ) : (
                                             <div className="space-y-3">

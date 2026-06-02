@@ -121,6 +121,10 @@ function isTaxComplianceService(serviceId: any) {
   return toPaddedId(serviceId) === '0001';
 }
 
+function newRecordId(prefix: string) {
+  return `${prefix}_${crypto.randomUUID()}`;
+}
+
 function mapMongoUser(user: any) {
   const id = String(user?.userID || user?._id || '');
   return {
@@ -149,6 +153,133 @@ function mapMongoNotification(notification: any) {
       ? notification.createdAt.toISOString()
       : notification?.createdAt || ''
   };
+}
+
+async function getRequestUser(req: any) {
+  const userId = req.cookies?.user_id;
+  if (!userId) return null;
+  const db = await getMongoDb();
+  const ids = userIdCandidates(userId);
+  return db.collection('users').findOne(
+    { $or: [{ _id: { $in: ids } }, { userID: { $in: ids } }] } as any,
+    { projection: { password: 0, passwordHash: 0 } }
+  );
+}
+
+function canDeleteEngagement(user: any) {
+  return ['Admin', 'Manager', 'Supervisor'].includes(String(user?.role || ''));
+}
+
+function isElevatedDeleteRole(user: any) {
+  return ['Admin', 'Manager', 'Supervisor'].includes(String(user?.role || ''));
+}
+
+function isMeetingDeleteRole(user: any) {
+  return ['Admin', 'Manager', 'Supervisor', 'Senior'].includes(String(user?.role || ''));
+}
+
+function userMatchesId(user: any, id: any) {
+  const targetIds = new Set(userIdCandidates(String(id || '')).map(candidate => candidate.toLowerCase()));
+  return [user?._id, user?.userID].some(value => targetIds.has(String(value || '').trim().toLowerCase()));
+}
+
+async function getUserByAnyId(db: any, id: any) {
+  const ids = userIdCandidates(String(id || ''));
+  return db.collection('users').findOne(
+    { $or: [{ _id: { $in: ids } }, { userID: { $in: ids } }] } as any,
+    { projection: { password: 0, passwordHash: 0 } }
+  );
+}
+
+async function canDeleteAssignedUserRecord(db: any, requestUser: any, assignedUserId: any) {
+  if (!requestUser || !assignedUserId) return false;
+  if (isElevatedDeleteRole(requestUser)) return true;
+  if (userMatchesId(requestUser, assignedUserId)) return true;
+
+  if (String(requestUser.role || '') !== 'Senior') return false;
+
+  const assignedUser = await getUserByAnyId(db, assignedUserId);
+  return Boolean(
+    assignedUser &&
+    String(assignedUser.role || '') === 'Staff' &&
+    String(assignedUser.team || '') &&
+    String(assignedUser.team || '') === String(requestUser.team || '')
+  );
+}
+
+async function canDeleteAnyAssignedUserRecord(db: any, requestUser: any, assignedUserIds: any[]) {
+  const uniqueIds = Array.from(new Set((assignedUserIds || []).flatMap(id => String(id || '').split(',').map(part => part.trim())).filter(Boolean)));
+  for (const assignedUserId of uniqueIds) {
+    if (await canDeleteAssignedUserRecord(db, requestUser, assignedUserId)) return true;
+  }
+  return false;
+}
+
+async function getTaskAssignedStaffIds(db: any, taskId: any) {
+  const ids = userIdCandidates(String(taskId || ''));
+  const task = await db.collection('taskLogs').findOne(
+    { $or: [{ _id: { $in: ids } }, { taskID: { $in: ids } }] },
+    { projection: { specialID: 1 } }
+  );
+  if (!task?.specialID) return [];
+
+  const specialIds = userIdCandidates(String(task.specialID));
+  const special = await db.collection('specialEngagements').findOne(
+    { $or: [{ _id: { $in: specialIds } }, { specialID: { $in: specialIds } }] },
+    { projection: { assignedStaffID: 1 } }
+  );
+  return special?.assignedStaffID ? [special.assignedStaffID] : [];
+}
+
+async function canDeleteTask(db: any, requestUser: any, taskId: any) {
+  return canDeleteAnyAssignedUserRecord(db, requestUser, await getTaskAssignedStaffIds(db, taskId));
+}
+
+async function canDeleteActivity(db: any, requestUser: any, activityId: any) {
+  const ids = userIdCandidates(String(activityId || ''));
+  const activity = await db.collection('activityLogs').findOne(
+    { $or: [{ _id: { $in: ids } }, { activityID: { $in: ids } }] },
+    { projection: { taskID: 1 } }
+  );
+  if (!activity?.taskID) return false;
+  return canDeleteTask(db, requestUser, activity.taskID);
+}
+
+async function canDeleteCredential(db: any, requestUser: any, credentialId: any) {
+  if (!requestUser) return false;
+  if (isElevatedDeleteRole(requestUser)) return true;
+
+  const ids = userIdCandidates(String(credentialId || ''));
+  const credential = await db.collection('credentials').findOne(
+    { $or: [{ _id: { $in: ids } }, { credentialID: { $in: ids } }] },
+    { projection: { clientID: 1 } }
+  );
+  if (!credential?.clientID) return false;
+
+  const clientIds = userIdCandidates(String(credential.clientID));
+  const [retainers, specials] = await Promise.all([
+    db.collection('retainerEngagements')
+      .find({ clientID: { $in: clientIds } }, { projection: { assignedStaffID: 1 } })
+      .toArray(),
+    db.collection('specialEngagements')
+      .find({ clientID: { $in: clientIds } }, { projection: { assignedStaffID: 1 } })
+      .toArray()
+  ]);
+
+  return canDeleteAnyAssignedUserRecord(
+    db,
+    requestUser,
+    [...retainers, ...specials].map(record => record.assignedStaffID)
+  );
+}
+
+function canDeleteTransmittalRecord(requestUser: any, transmittal: any) {
+  if (!requestUser || !transmittal) return false;
+  return isElevatedDeleteRole(requestUser) || userMatchesId(requestUser, transmittal.userID);
+}
+
+function canDeleteMeetingRecord(requestUser: any) {
+  return isMeetingDeleteRole(requestUser);
 }
 
 function mapMongoTask(task: any) {
@@ -278,16 +409,6 @@ function mapMongoMeeting(meeting: any) {
   };
 }
 
-async function getNextNumericId(collection: any, fieldName: string, width = 4) {
-  const rows = await collection.find({}, { projection: { [fieldName]: 1 } }).toArray();
-  const maxId = rows.reduce((max: number, row: any) => {
-    const id = parseInt(row?.[fieldName], 10);
-    return Number.isNaN(id) ? max : Math.max(max, id);
-  }, 0);
-
-  return String(maxId + 1).padStart(width, '0');
-}
-
 async function getNextTransmittalId(collection: any, dateValue: string) {
   const transmittalDate = new Date(dateValue);
   const month = String(transmittalDate.getMonth() + 1).padStart(2, '0');
@@ -301,16 +422,6 @@ async function getNextTransmittalId(collection: any, dateValue: string) {
   }, 0);
 
   return `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
-}
-
-async function getNextPaddedId(collection: any, fieldName: string) {
-  const rows = await collection.find({}, { projection: { [fieldName]: 1 } }).toArray();
-  const maxId = rows.reduce((max: number, row: any) => {
-    const id = parseInt(row?.[fieldName], 10);
-    return Number.isNaN(id) ? max : Math.max(max, id);
-  }, 0);
-
-  return String(maxId + 1).padStart(4, '0');
 }
 
 let mongoIndexPromise: Promise<void> | null = null;
@@ -494,6 +605,25 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 app.delete('/api/delete-file/:fileId', async (req, res) => {
   try {
     const { fileId } = req.params;
+    const db = await getMongoDb();
+    const requestUser = await getRequestUser(req);
+    const [transmittal, meeting] = await Promise.all([
+      db.collection<any>('transmittals').findOne({ receiptUrl: fileId }, { projection: { userID: 1 } }),
+      db.collection<any>('meetings').findOne({ momUrl: fileId }, { projection: { userIDs: 1 } })
+    ]);
+
+    if (transmittal && !canDeleteTransmittalRecord(requestUser, transmittal)) {
+      return res.status(403).json({ error: 'You do not have permission to delete this transmittal file' });
+    }
+
+    if (meeting && !canDeleteMeetingRecord(requestUser)) {
+      return res.status(403).json({ error: 'Only Admin, Manager, Supervisor, or Senior can delete meeting files' });
+    }
+
+    if (!transmittal && !meeting) {
+      return res.status(403).json({ error: 'File is not linked to a deletable record' });
+    }
+
     console.log(`[Drive] Deleting file: ${fileId}`);
     await drive.files.delete({ fileId });
     res.json({ success: true });
@@ -655,7 +785,7 @@ app.post('/api/users', async (req, res) => {
     const existing = await usersCollection.findOne({ userName: nextUserName });
     if (existing) return res.status(400).json({ error: 'Username already exists' });
 
-    const userID = await getNextPaddedId(usersCollection, 'userID');
+    const userID = newRecordId('usr');
     const passwordHash = await bcrypt.hash(password, 10);
     const now = new Date();
     const doc = {
@@ -998,7 +1128,7 @@ app.post('/api/meetings', async (req, res) => {
     const data = req.body;
     const db = await getMongoDb();
     const collection = db.collection<any>('meetings');
-    const nextId = await getNextNumericId(collection, 'meetingID');
+    const nextId = newRecordId('mtg');
 
     await collection.insertOne({
       _id: nextId,
@@ -1075,7 +1205,7 @@ app.post('/api/clients', async (req, res) => {
     const collection = db.collection<any>('clients');
     const client = req.body;
 
-    const nextId = await getNextPaddedId(collection, 'clientID');
+    const nextId = newRecordId('cli');
     console.log('[API] Generated next ID:', nextId);
 
     await collection.insertOne({
@@ -1167,37 +1297,100 @@ app.put('/api/retainers/:id', async (req, res) => {
 
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Retainer not found' });
 
-    await db.collection<any>('deadlines').deleteMany({ retainerID: { $in: ids } });
-    let nextDlIdNum = parseInt(await getNextPaddedId(db.collection<any>('deadlines'), 'deadlineID'), 10);
+    const deadlineCollection = db.collection<any>('deadlines');
+    const existingDeadlines = await deadlineCollection
+      .find({ retainerID: { $in: ids } })
+      .toArray();
+    const now = new Date();
+    const getNextDeadlineId = () => newRecordId('dl');
 
-    let deadlineRows = [];
     if (isTaxComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
-      deadlineRows = selectedTaxes.map((tax: any, idx: number) => ({
-        _id: (nextDlIdNum + idx).toString().padStart(4, '0'),
-        deadlineID: (nextDlIdNum + idx).toString().padStart(4, '0'),
-        retainerID: retainerId,
-        serviceID: normalizedServiceId,
-        taxID: tax.taxID,
-        dueDate: tax.dueDateCode,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }));
-    } else if (dueDateCode) {
-      const deadlineID = nextDlIdNum.toString().padStart(4, '0');
-      deadlineRows = [{
-        _id: deadlineID,
-        deadlineID,
-        retainerID: retainerId,
-        serviceID: normalizedServiceId,
-        taxID: '',
-        dueDate: dueDateCode,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }];
-    }
+      const selectedTaxRows = selectedTaxes
+        .map((tax: any) => ({
+          taxID: toPaddedId(tax.taxID),
+          dueDate: tax.dueDateCode,
+        }))
+        .filter((tax: any) => tax.taxID);
+      const selectedTaxIds = new Set(selectedTaxRows.map((tax: any) => tax.taxID));
+      const existingByTaxId = new Map(
+        existingDeadlines
+          .filter((deadline: any) => toPaddedId(deadline.serviceID) === normalizedServiceId && deadline.taxID)
+          .map((deadline: any) => [toPaddedId(deadline.taxID), deadline])
+      );
 
-    if (deadlineRows.length > 0) {
-      await db.collection<any>('deadlines').insertMany(deadlineRows);
+      for (const tax of selectedTaxRows) {
+        const existingDeadline = existingByTaxId.get(tax.taxID);
+        if (existingDeadline) {
+          await deadlineCollection.updateOne(
+            { _id: existingDeadline._id },
+            {
+              $set: {
+                retainerID: retainerId,
+                serviceID: normalizedServiceId,
+                taxID: tax.taxID,
+                dueDate: tax.dueDate,
+                updatedAt: now,
+              }
+            }
+          );
+        } else {
+          const deadlineID = getNextDeadlineId();
+          await deadlineCollection.insertOne({
+            _id: deadlineID,
+            deadlineID,
+            retainerID: retainerId,
+            serviceID: normalizedServiceId,
+            taxID: tax.taxID,
+            dueDate: tax.dueDate,
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      }
+
+      const removedDeadlineIds = existingDeadlines
+        .filter((deadline: any) => toPaddedId(deadline.serviceID) !== normalizedServiceId || !selectedTaxIds.has(toPaddedId(deadline.taxID)))
+        .map((deadline: any) => deadline._id);
+      if (removedDeadlineIds.length > 0) {
+        await deadlineCollection.deleteMany({ _id: { $in: removedDeadlineIds } });
+      }
+    } else if (dueDateCode) {
+      const existingDeadline = existingDeadlines.find((deadline: any) => toPaddedId(deadline.serviceID) === normalizedServiceId && !deadline.taxID);
+      if (existingDeadline) {
+        await deadlineCollection.updateOne(
+          { _id: existingDeadline._id },
+          {
+            $set: {
+              retainerID: retainerId,
+              serviceID: normalizedServiceId,
+              taxID: '',
+              dueDate: dueDateCode,
+              updatedAt: now,
+            }
+          }
+        );
+      } else {
+        const deadlineID = getNextDeadlineId();
+        await deadlineCollection.insertOne({
+          _id: deadlineID,
+          deadlineID,
+          retainerID: retainerId,
+          serviceID: normalizedServiceId,
+          taxID: '',
+          dueDate: dueDateCode,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      const removedDeadlineIds = existingDeadlines
+        .filter((deadline: any) => deadline._id !== existingDeadline?._id)
+        .map((deadline: any) => deadline._id);
+      if (removedDeadlineIds.length > 0) {
+        await deadlineCollection.deleteMany({ _id: { $in: removedDeadlineIds } });
+      }
+    } else {
+      await deadlineCollection.deleteMany({ retainerID: { $in: ids } });
     }
 
     console.log('[API] Successfully updated retainer and deadlines:', id);
@@ -1214,6 +1407,11 @@ app.delete('/api/retainers/:id', async (req, res) => {
 
   try {
     const db = await getMongoDb();
+    const requestUser = await getRequestUser(req);
+    if (!canDeleteEngagement(requestUser)) {
+      return res.status(403).json({ error: 'Only Admin, Manager, or Supervisor can delete retainer services' });
+    }
+
     const ids = userIdCandidates(id);
     const result = await db.collection<any>('retainerEngagements').deleteOne({
       $or: [{ _id: { $in: ids } }, { retainerID: { $in: ids } }]
@@ -1240,14 +1438,11 @@ app.post('/api/retainers', async (req, res) => {
     const retainerCollection = db.collection<any>('retainerEngagements');
     const deadlineCollection = db.collection<any>('deadlines');
     const results = [];
-    let nextRetainerIdNum = parseInt(await getNextPaddedId(retainerCollection, 'retainerID'), 10);
-    let nextDeadlineIdNum = parseInt(await getNextPaddedId(deadlineCollection, 'deadlineID'), 10);
-
     for (const task of assignments) {
       const { serviceId, assignedStaffId, startDate, dueDateCode, selectedTaxes } = task;
       const normalizedServiceId = toPaddedId(serviceId);
 
-      const retainerId = String(nextRetainerIdNum++).padStart(4, '0');
+      const retainerId = newRecordId('ret');
 
       await retainerCollection.insertOne({
         _id: retainerId,
@@ -1267,7 +1462,7 @@ app.post('/api/retainers', async (req, res) => {
 
       if (isTaxComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
         deadlineRows = selectedTaxes.map((tax: any) => {
-          const deadlineID = String(nextDeadlineIdNum++).padStart(4, '0');
+          const deadlineID = newRecordId('dl');
           return {
             _id: deadlineID,
             deadlineID,
@@ -1280,7 +1475,7 @@ app.post('/api/retainers', async (req, res) => {
           };
         });
       } else if (dueDateCode) {
-        const deadlineID = String(nextDeadlineIdNum++).padStart(4, '0');
+        const deadlineID = newRecordId('dl');
         deadlineRows = [{
           _id: deadlineID,
           deadlineID,
@@ -1323,10 +1518,8 @@ app.post('/api/specials', async (req, res) => {
     const db = await getMongoDb();
     const collection = db.collection<any>('specialEngagements');
     const results = [];
-    let nextIdNum = parseInt(await getNextPaddedId(collection, 'specialID'), 10);
-
     for (const task of assignments) {
-      const specialId = String(nextIdNum++).padStart(4, '0');
+      const specialId = newRecordId('spc');
 
       await collection.insertOne({
         _id: specialId,
@@ -1391,6 +1584,11 @@ app.delete('/api/specials/:id', async (req, res) => {
 
   try {
     const db = await getMongoDb();
+    const requestUser = await getRequestUser(req);
+    if (!canDeleteEngagement(requestUser)) {
+      return res.status(403).json({ error: 'Only Admin, Manager, or Supervisor can delete special engagements' });
+    }
+
     const ids = userIdCandidates(id);
     const taskDocs = await db.collection<any>('taskLogs')
       .find({ specialID: { $in: ids } }, { projection: { taskID: 1 } })
@@ -1519,7 +1717,7 @@ app.post('/api/tasks', async (req, res) => {
     }
 
     if (!id || await taskLogs.findOne({ _id: id })) {
-      id = await getNextPaddedId(taskLogs, 'taskID');
+      id = newRecordId('tsk');
     }
 
     await taskLogs.insertOne({
@@ -1566,8 +1764,14 @@ app.delete('/api/tasks/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const db = await getMongoDb();
-    const taskResult = await db.collection<any>('taskLogs').deleteOne({ _id: id });
-    await db.collection<any>('activityLogs').deleteMany({ taskID: id });
+    const requestUser = await getRequestUser(req);
+    if (!await canDeleteTask(db, requestUser, id)) {
+      return res.status(403).json({ error: 'You do not have permission to delete this task' });
+    }
+
+    const ids = userIdCandidates(id);
+    const taskResult = await db.collection<any>('taskLogs').deleteOne({ $or: [{ _id: { $in: ids } }, { taskID: { $in: ids } }] });
+    await db.collection<any>('activityLogs').deleteMany({ taskID: { $in: ids } });
 
     if (taskResult.deletedCount === 0) return res.status(404).json({ error: 'Task not found' });
 
@@ -1589,7 +1793,7 @@ app.post('/api/activities', async (req, res) => {
     }
 
     if (!id || await activityLogs.findOne({ _id: id })) {
-      id = await getNextPaddedId(activityLogs, 'activityID');
+      id = newRecordId('act');
     }
 
     await activityLogs.insertOne({
@@ -1636,7 +1840,13 @@ app.delete('/api/activities/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const db = await getMongoDb();
-    const result = await db.collection<any>('activityLogs').deleteOne({ _id: id });
+    const requestUser = await getRequestUser(req);
+    if (!await canDeleteActivity(db, requestUser, id)) {
+      return res.status(403).json({ error: 'You do not have permission to delete this activity log' });
+    }
+
+    const ids = userIdCandidates(id);
+    const result = await db.collection<any>('activityLogs').deleteOne({ $or: [{ _id: { $in: ids } }, { activityID: { $in: ids } }] });
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Activity not found' });
 
     return res.status(200).json({ success: true });
@@ -1652,7 +1862,7 @@ app.post('/api/credentials', async (req, res) => {
   try {
     const db = await getMongoDb();
     const collection = db.collection<any>('credentials');
-    const credentialID = await getNextNumericId(collection, 'credentialID');
+    const credentialID = newRecordId('cred');
 
     await collection.insertOne({
       _id: credentialID,
@@ -1702,6 +1912,11 @@ app.delete('/api/credentials/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const db = await getMongoDb();
+    const requestUser = await getRequestUser(req);
+    if (!await canDeleteCredential(db, requestUser, id)) {
+      return res.status(403).json({ error: 'You do not have permission to delete this credential' });
+    }
+
     const ids = userIdCandidates(id);
     const result = await db.collection<any>('credentials').deleteOne({ $or: [{ _id: { $in: ids } }, { credentialID: { $in: ids } }] });
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Credential not found' });
@@ -1716,6 +1931,12 @@ app.delete('/api/transmittals/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const db = await getMongoDb();
+    const requestUser = await getRequestUser(req);
+    const transmittal = await db.collection<any>('transmittals').findOne({ _id: id }, { projection: { userID: 1 } });
+    if (!canDeleteTransmittalRecord(requestUser, transmittal)) {
+      return res.status(403).json({ error: 'You do not have permission to delete this transmittal' });
+    }
+
     const result = await db.collection<any>('transmittals').deleteOne({ _id: id });
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Transmittal not found' });
 
@@ -1729,6 +1950,11 @@ app.delete('/api/meetings/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const db = await getMongoDb();
+    const requestUser = await getRequestUser(req);
+    if (!canDeleteMeetingRecord(requestUser)) {
+      return res.status(403).json({ error: 'Only Admin, Manager, Supervisor, or Senior can delete meetings' });
+    }
+
     const result = await db.collection<any>('meetings').deleteOne({ _id: id });
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Meeting not found' });
 

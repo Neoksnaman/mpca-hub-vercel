@@ -1,10 +1,10 @@
 import React, { forwardRef } from 'react';
 
-const SingleSlip = ({ transmittal, client, staffMember, logoUrl, copyType, formattedDate }: any) => {
+const SingleSlip = ({ transmittal, client, staffMember, logoUrl, copyType, formattedDate, showSignatures = true, pinSignaturesBottom = false, showCutGuideBelowSignatures = false }: any) => {
     const items = transmittal.items.split('||');
 
     return (
-        <div className="flex flex-col text-black font-sans text-[11px]" style={{ fontFamily: 'Arial, sans-serif' }}>
+        <div className={`flex flex-col text-black font-sans text-[11px] ${pinSignaturesBottom ? 'h-full' : ''}`} style={{ fontFamily: 'Arial, sans-serif' }}>
             {/* Header */}
             <div className="flex justify-between items-start mb-3">
                 <div className="w-64 h-16 flex items-center">
@@ -70,7 +70,7 @@ const SingleSlip = ({ transmittal, client, staffMember, logoUrl, copyType, forma
             </div>
 
             {/* CONTENTS */}
-            <div className="mb-8">
+            <div className={`mb-8 ${pinSignaturesBottom ? 'flex-1' : ''}`}>
                 <div className="font-bold italic mb-0.5">
                     Please acknowledge your receipt of the following:
                 </div>
@@ -89,44 +89,87 @@ const SingleSlip = ({ transmittal, client, staffMember, logoUrl, copyType, forma
                 </div>
             </div>
 
-            {/* Signatures */}
-            <div className="flex justify-between font-bold gap-8">
-                <div className="flex-1 flex flex-col gap-2">
-                    <div className="flex items-end">
-                        <span className="w-[115px] shrink-0 uppercase mb-1">TRANSMITTED BY:</span>
-                        <div className="flex-1 relative h-6">
-                            <span className="absolute bottom-1 left-1/2 -translate-x-1/2 font-normal whitespace-nowrap">
-                                {staffMember ? `${staffMember.firstName} ${staffMember.lastName}` : ''}
-                            </span>
-                            <div className="absolute bottom-0 left-0 w-full border-b border-black"></div>
+            {showSignatures && (
+                <>
+                    <div className={`flex justify-between font-bold gap-8 ${pinSignaturesBottom ? 'mt-auto' : ''}`}>
+                        <div className="flex-1 flex flex-col gap-2">
+                            <div className="flex items-end">
+                                <span className="w-[115px] shrink-0 uppercase mb-1">TRANSMITTED BY:</span>
+                                <div className="flex-1 relative h-6">
+                                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 font-normal whitespace-nowrap">
+                                        {staffMember ? `${staffMember.firstName} ${staffMember.lastName}` : ''}
+                                    </span>
+                                    <div className="absolute bottom-0 left-0 w-full border-b border-black"></div>
+                                </div>
+                            </div>
+                            <div className="flex items-end">
+                                <span className="w-[115px] shrink-0 uppercase mb-1">DATE/TIME:</span>
+                                <div className="flex-1 relative h-6">
+                                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 font-normal whitespace-nowrap">
+                                        {formattedDate}
+                                    </span>
+                                    <div className="absolute bottom-0 left-0 w-full border-b border-black"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex-1 flex flex-col gap-2">
+                            <div className="flex items-end">
+                                <span className="w-[115px] shrink-0 uppercase mb-1">RECEIVED BY:</span>
+                                <div className="flex-1 relative h-6">
+                                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 font-normal whitespace-nowrap"></span>
+                                    <div className="absolute bottom-0 left-0 w-full border-b border-black"></div>
+                                </div>
+                            </div>
+                            <div className="flex items-end">
+                                <span className="w-[115px] shrink-0 uppercase mb-1">DATE/TIME:</span>
+                                <div className="flex-1 relative h-6">
+                                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 font-normal whitespace-nowrap"></span>
+                                    <div className="absolute bottom-0 left-0 w-full border-b border-black"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <div className="flex items-end">
-                        <span className="w-[115px] shrink-0 uppercase mb-1">DATE/TIME:</span>
-                        <div className="flex-1 relative h-6">
-                            <span className="absolute bottom-1 left-1/2 -translate-x-1/2 font-normal whitespace-nowrap">
-                                {formattedDate}
-                            </span>
-                            <div className="absolute bottom-0 left-0 w-full border-b border-black"></div>
+                    {showCutGuideBelowSignatures && (
+                        <div className="-mx-12 border-b-[3px] border-dashed border-gray-400 mt-8 relative">
+                            <span className="absolute left-12 -top-4 text-gray-400 text-[10px] bg-white pr-2">✂ cut here</span>
                         </div>
-                    </div>
-                </div>
-                <div className="flex-1 flex flex-col gap-2">
-                    <div className="flex items-end">
-                        <span className="w-[115px] shrink-0 uppercase mb-1">RECEIVED BY:</span>
-                        <div className="flex-1 relative h-6">
-                            <span className="absolute bottom-1 left-1/2 -translate-x-1/2 font-normal whitespace-nowrap"></span>
-                            <div className="absolute bottom-0 left-0 w-full border-b border-black"></div>
-                        </div>
-                    </div>
-                    <div className="flex items-end">
-                        <span className="w-[115px] shrink-0 uppercase mb-1">DATE/TIME:</span>
-                        <div className="flex-1 relative h-6">
-                            <span className="absolute bottom-1 left-1/2 -translate-x-1/2 font-normal whitespace-nowrap"></span>
-                            <div className="absolute bottom-0 left-0 w-full border-b border-black"></div>
-                        </div>
-                    </div>
-                </div>
+                    )}
+                </>
+            )}
+        </div>
+    );
+};
+
+const chunkItems = (items: string[], chunkSize = 20) => {
+    const chunks: string[][] = [];
+    for (let i = 0; i < items.length; i += chunkSize) {
+        chunks.push(items.slice(i, i + chunkSize));
+    }
+    return chunks;
+};
+
+const PagedSlip = ({ transmittal, client, staffMember, logoUrl, copyType, formattedDate, items, pageNumber, totalPages, pageBreakAfter }: any) => {
+    const pageTransmittal = {
+        ...transmittal,
+        items: items.join('||')
+    };
+
+    return (
+        <div className="w-[794px] h-[1123px] px-12 py-12 flex flex-col" style={{ pageBreakAfter }}>
+            <div className="flex-1 flex flex-col min-h-0">
+                <SingleSlip
+                    transmittal={pageTransmittal}
+                    client={client}
+                    staffMember={staffMember}
+                    logoUrl={logoUrl}
+                    copyType={copyType}
+                    formattedDate={formattedDate}
+                    showSignatures={pageNumber === totalPages}
+                    pinSignaturesBottom
+                />
+            </div>
+            <div className="text-right text-[9px] font-bold text-gray-500 mt-2">
+                Page {pageNumber} of {totalPages}
             </div>
         </div>
     );
@@ -145,6 +188,46 @@ export const TransmittalPrintTemplate = forwardRef<HTMLDivElement, any>(({ trans
     const formattedDate = formatDate(transmittal.date);
     const itemsCount = transmittal.items ? transmittal.items.split('||').length : 0;
 
+    if (itemsCount > 25) {
+        const itemPages = chunkItems(transmittal.items.split('||'), 25);
+        const totalPages = itemPages.length;
+
+        return (
+            <div ref={ref} className="bg-white flex flex-col">
+                {itemPages.map((items, index) => (
+                    <PagedSlip
+                        key={`client-${index}`}
+                        transmittal={transmittal}
+                        client={client}
+                        staffMember={staffMember}
+                        logoUrl={logoUrl}
+                        copyType="CLIENT'S COPY"
+                        formattedDate={formattedDate}
+                        items={items}
+                        pageNumber={index + 1}
+                        totalPages={totalPages}
+                        pageBreakAfter="always"
+                    />
+                ))}
+                {itemPages.map((items, index) => (
+                    <PagedSlip
+                        key={`mpca-${index}`}
+                        transmittal={transmittal}
+                        client={client}
+                        staffMember={staffMember}
+                        logoUrl={logoUrl}
+                        copyType="MPCA's COPY"
+                        formattedDate={formattedDate}
+                        items={items}
+                        pageNumber={index + 1}
+                        totalPages={totalPages}
+                        pageBreakAfter={index < itemPages.length - 1 ? 'always' : 'auto'}
+                    />
+                ))}
+            </div>
+        );
+    }
+
     if (itemsCount > 8) {
         return (
             <div ref={ref} className="bg-white flex flex-col">
@@ -158,6 +241,7 @@ export const TransmittalPrintTemplate = forwardRef<HTMLDivElement, any>(({ trans
                             logoUrl={logoUrl} 
                             copyType="CLIENT'S COPY" 
                             formattedDate={formattedDate}
+                            showCutGuideBelowSignatures={itemsCount > 8 && itemsCount < 20}
                         />
                     </div>
                 </div>
@@ -171,6 +255,7 @@ export const TransmittalPrintTemplate = forwardRef<HTMLDivElement, any>(({ trans
                             logoUrl={logoUrl} 
                             copyType="MPCA's COPY" 
                             formattedDate={formattedDate}
+                            showCutGuideBelowSignatures={itemsCount > 8 && itemsCount < 20}
                         />
                     </div>
                 </div>

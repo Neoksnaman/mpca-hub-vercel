@@ -130,6 +130,24 @@ const Engagements: React.FC = () => {
     const [taskToDelete, setTaskToDelete] = useState<any | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
 
+    const canDeleteSpecialWork = useMemo(() => {
+        if (!user || !selectedItem?.assignedStaff) return false;
+        if (user.role === UserRole.ADMIN || user.role === UserRole.MANAGER || user.role === UserRole.SUPERVISOR) return true;
+
+        const assignedUser = allUsers.find(u =>
+            normalizeId(u.id) === normalizeId(selectedItem.assignedStaff) ||
+            u.firstName === selectedItem.assignedStaff ||
+            `${u.firstName} ${u.lastName}` === selectedItem.assignedStaff
+        );
+
+        if (!assignedUser) return false;
+        if (normalizeId(assignedUser.id) === normalizeId(user.id)) return true;
+
+        return user.role === UserRole.SENIOR &&
+            assignedUser.role === UserRole.STAFF &&
+            assignedUser.team === user.team;
+    }, [user, selectedItem?.assignedStaff, allUsers]);
+
     // Click outside handler for activity menu
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -1463,16 +1481,18 @@ const Engagements: React.FC = () => {
                                                                             >
                                                                                 <Edit size={16} />
                                                                             </button>
-                                                                            <button
-                                                                                onClick={() => {
-                                                                                    setTaskToDelete(task);
-                                                                                    setShowDeleteTaskModal(true);
-                                                                                }}
-                                                                                className="p-2 text-secondary hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
-                                                                                title="Delete Task"
-                                                                            >
-                                                                                <Trash2 size={16} />
-                                                                            </button>
+                                                                            {canDeleteSpecialWork && (
+                                                                                <button
+                                                                                    onClick={() => {
+                                                                                        setTaskToDelete(task);
+                                                                                        setShowDeleteTaskModal(true);
+                                                                                    }}
+                                                                                    className="p-2 text-secondary hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
+                                                                                    title="Delete Task"
+                                                                                >
+                                                                                    <Trash2 size={16} />
+                                                                                </button>
+                                                                            )}
                                                                         </div>
                                                                     </>
                                                                 )}
@@ -1590,17 +1610,19 @@ const Engagements: React.FC = () => {
                                                                                                                 <Edit size={12} />
                                                                                                                 Edit
                                                                                                             </button>
-                                                                                                            <button
-                                                                                                                onClick={() => {
-                                                                                                                    setActivityToDelete(activity);
-                                                                                                                    setShowDeleteActivityModal(true);
-                                                                                                                    setActiveMenuActivityId(null);
-                                                                                                                }}
-                                                                                                                className="w-full px-4 py-2 text-left text-[10px] font-black uppercase tracking-widest text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/10 transition-colors flex items-center gap-2"
-                                                                                                            >
-                                                                                                                <Trash2 size={12} />
-                                                                                                                Delete
-                                                                                                            </button>
+                                                                                                            {canDeleteSpecialWork && (
+                                                                                                                <button
+                                                                                                                    onClick={() => {
+                                                                                                                        setActivityToDelete(activity);
+                                                                                                                        setShowDeleteActivityModal(true);
+                                                                                                                        setActiveMenuActivityId(null);
+                                                                                                                    }}
+                                                                                                                    className="w-full px-4 py-2 text-left text-[10px] font-black uppercase tracking-widest text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/10 transition-colors flex items-center gap-2"
+                                                                                                                >
+                                                                                                                    <Trash2 size={12} />
+                                                                                                                    Delete
+                                                                                                                </button>
+                                                                                                            )}
                                                                                                         </div>
                                                                                                     )}
                                                                                                 </div>

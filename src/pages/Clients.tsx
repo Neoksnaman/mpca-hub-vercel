@@ -11,6 +11,7 @@ import { addClient, addRetainer, updateClient, updateRetainer, deleteRetainer, a
 const normalizeId = (id: any) => String(id || '').replace(/^0+(?!$)/, '').trim() || '0';
 const getUserFullName = (user: any) => `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
 const sortUsersByName = (users: any[]) => [...users].sort((a, b) => getUserFullName(a).localeCompare(getUserFullName(b)));
+const isClientActiveRecord = (client: any) => String(client?.status || '').toLowerCase().includes('active') && !String(client?.status || '').toLowerCase().includes('inactive');
 
 // --- Sub-components to reduce duplication ---
 
@@ -668,9 +669,11 @@ const CredentialBox = ({
                     <button onClick={() => onEdit?.(credential)} className="p-2 text-secondary hover:text-primary hover:bg-primary/10 rounded-xl transition-all" title="Edit Credential">
                         <Edit2 size={14} />
                     </button>
-                    <button onClick={() => onDelete?.(credential.credentialID)} className="p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all" title="Delete Credential">
-                        <Trash2 size={14} />
-                    </button>
+                    {onDelete && (
+                        <button onClick={() => onDelete(credential.credentialID)} className="p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all" title="Delete Credential">
+                            <Trash2 size={14} />
+                        </button>
+                    )}
                 </div>
             </div>
             
@@ -779,9 +782,11 @@ const CredentialRow = ({
                 <button type="button" onClick={() => onEdit?.(credential)} className="p-2 text-secondary hover:text-primary hover:bg-primary/10 rounded-xl transition-all" title="Edit Credential">
                     <Edit2 size={14} />
                 </button>
-                <button type="button" onClick={() => onDelete?.(credential.credentialID)} className="p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all" title="Delete Credential">
-                    <Trash2 size={14} />
-                </button>
+                {onDelete && (
+                    <button type="button" onClick={() => onDelete(credential.credentialID)} className="p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all" title="Delete Credential">
+                        <Trash2 size={14} />
+                    </button>
+                )}
             </div>
         </div>
     );
@@ -1382,6 +1387,9 @@ const Clients: React.FC = () => {
         user?.role === UserRole.MANAGER ||
         user?.role === UserRole.SUPERVISOR ||
         user?.role === UserRole.SENIOR;
+    const canDeleteAssignment = user?.role === UserRole.ADMIN ||
+        user?.role === UserRole.MANAGER ||
+        user?.role === UserRole.SUPERVISOR;
 
     const clientLookups = useMemo(() => {
         const userByKey = new Map<string, any>();
@@ -1446,7 +1454,7 @@ const Clients: React.FC = () => {
         if (!assignedStaffStr) return false;
 
         const staffNames = assignedStaffStr.split(',').map(s => s.trim());
-        
+
         return staffNames.some(staffName => {
             const staffUser = clientLookups.userByKey.get(staffName);
             if (!staffUser) return false;
@@ -1456,6 +1464,29 @@ const Clients: React.FC = () => {
             }
 
             return staffUser.id === user.id;
+        });
+    };
+
+    const canDeleteCredentialForClient = (client: any) => {
+        if (!user || !client) return false;
+        if (user.role === UserRole.ADMIN || user.role === UserRole.MANAGER || user.role === UserRole.SUPERVISOR) return true;
+
+        const assignedStaffKeys = [
+            ...retainers
+                .filter(r => normalizeId(r.clientId) === normalizeId(client.id))
+                .map(r => r.assignedStaff),
+            ...specials
+                .filter(s => normalizeId(s.clientId) === normalizeId(client.id))
+                .map(s => s.assignedStaff)
+        ].flatMap(staff => String(staff || '').split(',').map(part => part.trim()).filter(Boolean));
+
+        return assignedStaffKeys.some(staffKey => {
+            const staffUser = clientLookups.userByKey.get(staffKey);
+            if (!staffUser) return false;
+            if (normalizeId(staffUser.id) === normalizeId(user.id)) return true;
+            return user.role === UserRole.SENIOR &&
+                staffUser.role === UserRole.STAFF &&
+                staffUser.team === user.team;
         });
     };
 
@@ -1670,8 +1701,13 @@ const Clients: React.FC = () => {
                 return staffUser.id === user.id;
             };
 
-            const clientRetainers = (clientLookups.retainersByClient.get(targetId) || []).filter(r => isVisible(r.assignedStaff));
-            const clientSpecials = (clientLookups.specialsByClient.get(targetId) || []).filter(s => isVisible(s.assignedStaff));
+            const isClientActive = isClientActiveRecord(c);
+            const clientRetainers = isClientActive
+                ? (clientLookups.retainersByClient.get(targetId) || []).filter(r => isVisible(r.assignedStaff))
+                : [];
+            const clientSpecials = isClientActive
+                ? (clientLookups.specialsByClient.get(targetId) || []).filter(s => isVisible(s.assignedStaff))
+                : [];
 
             const types = new Set<string>();
             if (clientRetainers.length > 0) types.add('Retainer');
@@ -1707,7 +1743,7 @@ const Clients: React.FC = () => {
                 specialProjects: clientSpecials,
                 retainerStatus: clientRetainers[0]?.engagementStatus || '',
                 specialStatus: clientSpecials[0]?.status || '',
-                isActive: c.status?.toLowerCase().includes('active') && !c.status?.toLowerCase().includes('inactive')
+                isActive: isClientActive
             };
         });
 
@@ -2703,8 +2739,10 @@ const Clients: React.FC = () => {
                             <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                                 {[
                                     { id: 'client-overview', label: 'Overview' },
-                                    { id: 'client-retainers', label: 'Retainers' },
-                                    { id: 'client-specials', label: 'Special Projects' },
+                                    ...(isClientActiveRecord(selectedClient) ? [
+                                        { id: 'client-retainers', label: 'Retainers' },
+                                        { id: 'client-specials', label: 'Special Projects' }
+                                    ] : []),
                                     { id: 'client-credentials', label: 'Credentials' }
                                 ].map(item => (
                                     <button
@@ -2873,7 +2911,7 @@ const Clients: React.FC = () => {
                             </ClientDrawerSection>
 
                             {/* Active Retainer Engagements */}
-                            {(activeTab === 'All' || activeTab === 'Retainer') && (
+                            {isClientActiveRecord(selectedClient) && (activeTab === 'All' || activeTab === 'Retainer') && (
                                 <ClientDrawerSection
                                     id="client-retainers"
                                     title="Retainer Services"
@@ -3034,7 +3072,7 @@ const Clients: React.FC = () => {
                                                          >
                                                              <Edit2 size={14} />
                                                          </button>
-                                                         {canModifyAssignment && (
+                                                         {canDeleteAssignment && (
                                                              <button 
                                                                 onClick={() => handleDeleteRetainer(r)} 
                                                                 className="p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all"
@@ -3061,7 +3099,7 @@ const Clients: React.FC = () => {
                         )}
 
                             {/* Special Engagements Section */}
-                            {(activeTab === 'All' || activeTab === 'Special') && (
+                            {isClientActiveRecord(selectedClient) && (activeTab === 'All' || activeTab === 'Special') && (
                                 <ClientDrawerSection
                                     id="client-specials"
                                     title="Special Engagements"
@@ -3213,7 +3251,7 @@ const Clients: React.FC = () => {
                                                          >
                                                             <Edit2 size={14} />
                                                          </button>
-                                                         {canModifyAssignment && (
+                                                         {canDeleteAssignment && (
                                                              <button 
                                                                 onClick={() => handleDeleteSpecial(s)} 
                                                                 className="p-2 text-secondary hover:text-error hover:bg-error/10 rounded-xl transition-all"
@@ -3310,7 +3348,7 @@ const Clients: React.FC = () => {
                                                                     setEditingCredentialId(cred.credentialID);
                                                                     setCredentialFormData(cred);
                                                                 }}
-                                                                onDelete={handleDeleteCredential}
+                                                                onDelete={canDeleteCredentialForClient(selectedClient) ? handleDeleteCredential : undefined}
                                                             />
                                                         )
                                                     ))
@@ -3343,7 +3381,7 @@ const Clients: React.FC = () => {
                             <h3 className="text-lg font-bold text-neutral-dark dark:text-white mb-2">
                                 {itemToDelete.type === 'Retainer' ? 'Delete Assigned Service?' : itemToDelete.type === 'Special' ? 'Delete Special Engagement?' : 'Delete System Credential?'}
                             </h3>
-                            <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+                            <p className="text-sm text-secondary dark:text-gray-400 mb-1">
                                 Are you sure you want to remove <span className="font-bold text-neutral-dark dark:text-white">
                                     "{itemToDelete.type === 'Retainer'
                                         ? (itemToDelete.data.serviceName || itemToDelete.data.serviceType)
@@ -3351,12 +3389,19 @@ const Clients: React.FC = () => {
                                             ? (itemToDelete.data.projectTitle || 'this project')
                                             : (itemToDelete.data.name || 'this credential')}"
                                 </span>?
-                                {itemToDelete.type === 'Retainer' && (
-                                    <>
-                                        <br />This will also delete all associated deadlines.
-                                    </>
-                                )}
-                                <br />This action cannot be undone.
+                            </p>
+                            {itemToDelete.type === 'Retainer' && (
+                                <p className="text-sm font-bold text-rose-600 dark:text-rose-400 mb-1">
+                                    This will also delete all associated deadlines.
+                                </p>
+                            )}
+                            {itemToDelete.type === 'Special' && (
+                                <p className="text-sm font-bold text-rose-600 dark:text-rose-400 mb-1">
+                                    This will also delete all related tasks and activity logs.
+                                </p>
+                            )}
+                            <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+                                This action cannot be undone.
                             </p>
 
                             <div className="flex gap-3">
