@@ -113,6 +113,14 @@ function userIdCandidates(id: string) {
   return Array.from(new Set([raw, normalized, normalized.padStart(4, '0')]));
 }
 
+function toPaddedId(id: any, width = 4) {
+  return (String(id || '').trim().replace(/^0+/, '') || '0').padStart(width, '0');
+}
+
+function isTaxComplianceService(serviceId: any) {
+  return toPaddedId(serviceId) === '0001';
+}
+
 function mapMongoUser(user: any) {
   const id = String(user?.userID || user?._id || '');
   return {
@@ -1140,14 +1148,15 @@ app.put('/api/retainers/:id', async (req, res) => {
   try {
     const db = await getMongoDb();
     const ids = userIdCandidates(id);
-    const retainerId = ids[2];
+    const retainerId = toPaddedId(id);
+    const normalizedServiceId = toPaddedId(serviceId);
 
     const result = await db.collection<any>('retainerEngagements').updateOne(
       { $or: [{ _id: { $in: ids } }, { retainerID: { $in: ids } }] },
       {
         $set: {
           clientID: clientId,
-          serviceID: serviceId,
+          serviceID: normalizedServiceId,
           startDate,
           status: 'Active',
           assignedStaffID: assignedStaffId,
@@ -1162,12 +1171,12 @@ app.put('/api/retainers/:id', async (req, res) => {
     let nextDlIdNum = parseInt(await getNextPaddedId(db.collection<any>('deadlines'), 'deadlineID'), 10);
 
     let deadlineRows = [];
-    if (serviceId === '0001' && selectedTaxes && selectedTaxes.length > 0) {
+    if (isTaxComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
       deadlineRows = selectedTaxes.map((tax: any, idx: number) => ({
         _id: (nextDlIdNum + idx).toString().padStart(4, '0'),
         deadlineID: (nextDlIdNum + idx).toString().padStart(4, '0'),
         retainerID: retainerId,
-        serviceID: serviceId,
+        serviceID: normalizedServiceId,
         taxID: tax.taxID,
         dueDate: tax.dueDateCode,
         createdAt: new Date(),
@@ -1179,8 +1188,7 @@ app.put('/api/retainers/:id', async (req, res) => {
         _id: deadlineID,
         deadlineID,
         retainerID: retainerId,
-        serviceId,
-        serviceID: serviceId,
+        serviceID: normalizedServiceId,
         taxID: '',
         dueDate: dueDateCode,
         createdAt: new Date(),
@@ -1237,6 +1245,7 @@ app.post('/api/retainers', async (req, res) => {
 
     for (const task of assignments) {
       const { serviceId, assignedStaffId, startDate, dueDateCode, selectedTaxes } = task;
+      const normalizedServiceId = toPaddedId(serviceId);
 
       const retainerId = String(nextRetainerIdNum++).padStart(4, '0');
 
@@ -1244,7 +1253,7 @@ app.post('/api/retainers', async (req, res) => {
         _id: retainerId,
         retainerID: retainerId,
         clientID: clientId,
-        serviceID: serviceId,
+        serviceID: normalizedServiceId,
         startDate,
         status: 'Active',
         assignedStaffID: assignedStaffId,
@@ -1252,18 +1261,18 @@ app.post('/api/retainers', async (req, res) => {
         updatedAt: new Date(),
       });
 
-      console.log('[API] Adding deadlines for retainer:', retainerId, 'Service:', serviceId);
+      console.log('[API] Adding deadlines for retainer:', retainerId, 'Service:', normalizedServiceId);
 
       let deadlineRows = [];
 
-      if (serviceId === '0001' && selectedTaxes && selectedTaxes.length > 0) {
+      if (isTaxComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
         deadlineRows = selectedTaxes.map((tax: any) => {
           const deadlineID = String(nextDeadlineIdNum++).padStart(4, '0');
           return {
             _id: deadlineID,
             deadlineID,
             retainerID: retainerId,
-            serviceID: serviceId,
+            serviceID: normalizedServiceId,
             taxID: tax.taxID,
             dueDate: tax.dueDateCode,
             createdAt: new Date(),
@@ -1276,7 +1285,7 @@ app.post('/api/retainers', async (req, res) => {
           _id: deadlineID,
           deadlineID,
           retainerID: retainerId,
-          serviceID: serviceId,
+          serviceID: normalizedServiceId,
           taxID: '',
           dueDate: dueDateCode,
           createdAt: new Date(),
@@ -1288,7 +1297,7 @@ app.post('/api/retainers', async (req, res) => {
         await deadlineCollection.insertMany(deadlineRows);
       }
       
-      results.push({ retainerId, serviceId });
+      results.push({ retainerId, serviceId: normalizedServiceId });
     }
 
     return res.status(200).json({ success: true, results });
