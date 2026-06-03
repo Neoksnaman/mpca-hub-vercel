@@ -2,6 +2,7 @@
 import React, { useContext, useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Menu, Bell, User, Sun, Moon, Briefcase, Calendar, Check, AlertCircle } from 'lucide-react';
 import { AppContext } from '../App';
+import ChatMessages from './ChatMessages';
 import { fetchNotifications, markNotificationRead, markAllNotificationsRead } from '../services/googleSheetsService';
 import { months, computeActualDueDate, parseDateStr } from '../utils/dateUtils';
 import { Client, Notification, RetainerEngagement } from '../types';
@@ -285,10 +286,12 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
           <Menu size={24} />
         </button>
         
-        <div className="flex items-center space-x-4">
-          <button onClick={toggleTheme} className="text-neutral-dark dark:text-neutral-light">
+        <div className="flex items-center gap-3">
+          <button onClick={toggleTheme} className="w-8 h-8 flex items-center justify-center text-neutral-dark dark:text-neutral-light hover:bg-neutral-light dark:hover:bg-gray-700 rounded-full transition-colors">
             {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
           </button>
+
+          {user && <ChatMessages currentUser={user} users={context.users || []} pollingPaused={context.isIdlePollingPaused} />}
           
           <div className="relative" ref={notifRef}>
             <button 
@@ -297,7 +300,7 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
                 setNotificationsOpen(nextOpen);
                 if (nextOpen) loadPersistedNotifications();
               }}
-              className="text-neutral-dark dark:text-neutral-light relative p-1.5 hover:bg-neutral-light dark:hover:bg-gray-700 rounded-full transition-colors"
+              className="w-8 h-8 flex items-center justify-center text-neutral-dark dark:text-neutral-light relative hover:bg-neutral-light dark:hover:bg-gray-700 rounded-full transition-colors"
             >
               <Bell size={20} />
               {unreadCount > 0 && (

@@ -1,5 +1,5 @@
 
-import { User, AppData, RetainerEngagement, SpecialEngagement, TaxCompliance, Client, UserRole, ClientCredential, Service, Transmittal, Meeting, Notification, DeliverableLog } from '../types';
+import { User, AppData, RetainerEngagement, SpecialEngagement, TaxCompliance, Client, UserRole, ClientCredential, Service, Transmittal, Meeting, Notification, DeliverableLog, ChatThread, ChatMessage } from '../types';
 
 
 // --- Shared Utilities ---
@@ -212,6 +212,33 @@ export const markAllNotificationsRead = (userId: string) =>
     apiCall<{ success: boolean }>('/api/notifications/read-all', {
         method: 'POST',
         body: JSON.stringify({ userId })
+    });
+
+export const fetchChatThreads = (userId: string, limit = 30) =>
+    apiCall<ChatThread[]>(`/api/chat/threads?userId=${encodeURIComponent(userId)}&limit=${limit}`);
+
+export const fetchChatMessages = (threadId: string, userId: string, limit = 10, before?: string) => {
+    const params = new URLSearchParams({ threadId, userId, limit: String(limit) });
+    if (before) params.set('before', before);
+    return apiCall<ChatMessage[]>(`/api/chat/messages?${params.toString()}`);
+};
+
+export const sendChatMessage = (data: { threadId?: string; senderUserID: string; recipientUserIDs: string[]; message: string; type?: 'direct' | 'group'; threadTitle?: string }) =>
+    apiCall<{ success: boolean; threadId: string; message: ChatMessage }>('/api/chat/messages', {
+        method: 'POST',
+        body: JSON.stringify(data)
+    });
+
+export const markChatThreadRead = (threadId: string, userId: string) =>
+    apiCall<{ success: boolean; modifiedCount: number }>('/api/chat/read', {
+        method: 'POST',
+        body: JSON.stringify({ threadId, userId })
+    });
+
+export const updateChatThreadSettings = (data: { threadId: string; userId: string; threadTitle: string; participantUserIDs: string[]; adminUserIDs: string[] }) =>
+    apiCall<{ success: boolean; thread: ChatThread }>('/api/chat/thread-settings', {
+        method: 'PUT',
+        body: JSON.stringify(data)
     });
 
 export const addClient = (clientData: Omit<Client, 'id'>) =>

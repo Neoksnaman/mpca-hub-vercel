@@ -159,6 +159,31 @@ export interface Notification {
   createdAt: string;
 }
 
+export interface ChatThread {
+  id: string;
+  type: 'direct' | 'group';
+  threadTitle: string;
+  participantUserIDs: string[];
+  participantKey: string;
+  createdByUserID: string;
+  adminUserIDs: string[];
+  lastMessage: string;
+  lastSenderUserID: string;
+  lastMessageAt: string;
+  unreadCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  threadId: string;
+  senderUserID: string;
+  message: string;
+  readBy: string[];
+  createdAt: string;
+}
+
 export interface AppData {
   retainers: RetainerEngagement[];
   specials: SpecialEngagement[];

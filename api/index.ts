@@ -155,6 +155,43 @@ function mapMongoNotification(notification: any) {
   };
 }
 
+function mapMongoChatThread(thread: any, unreadCount = 0) {
+  return {
+    id: String(thread?._id || ''),
+    type: thread?.type || (Array.isArray(thread?.participantUserIDs) && thread.participantUserIDs.length > 2 ? 'group' : 'direct'),
+    threadTitle: thread?.threadTitle || thread?.title || '',
+    participantUserIDs: Array.isArray(thread?.participantUserIDs) ? thread.participantUserIDs.map(String) : [],
+    participantKey: thread?.participantKey || '',
+    createdByUserID: thread?.createdByUserID || '',
+    adminUserIDs: Array.isArray(thread?.adminUserIDs) ? thread.adminUserIDs.map(String) : [],
+    lastMessage: thread?.lastMessage || '',
+    lastSenderUserID: thread?.lastSenderUserID || '',
+    lastMessageAt: thread?.lastMessageAt instanceof Date
+      ? thread.lastMessageAt.toISOString()
+      : thread?.lastMessageAt || '',
+    unreadCount,
+    createdAt: thread?.createdAt instanceof Date
+      ? thread.createdAt.toISOString()
+      : thread?.createdAt || '',
+    updatedAt: thread?.updatedAt instanceof Date
+      ? thread.updatedAt.toISOString()
+      : thread?.updatedAt || ''
+  };
+}
+
+function mapMongoChatMessage(message: any) {
+  return {
+    id: String(message?._id || ''),
+    threadId: message?.threadId || '',
+    senderUserID: message?.senderUserID || '',
+    message: message?.message || '',
+    readBy: Array.isArray(message?.readBy) ? message.readBy.map(String) : [],
+    createdAt: message?.createdAt instanceof Date
+      ? message.createdAt.toISOString()
+      : message?.createdAt || ''
+  };
+}
+
 async function getRequestUser(req: any) {
   const userId = req.cookies?.user_id;
   if (!userId) return null;
@@ -361,7 +398,8 @@ function mapMongoDeadline(deadline: any) {
     retainerID: deadline?.retainerID || '',
     serviceID: deadline?.serviceID || '',
     taxID: deadline?.taxID || '',
-    dueDate: deadline?.dueDate || ''
+    dueDate: deadline?.dueDate || '',
+    status: deadline?.status || 'Active'
   };
 }
 
@@ -469,6 +507,9 @@ async function ensureMongoIndexes() {
         createIndex('transmittals', { clientID: 1 }),
         createIndex('meetings', { date: -1 }),
         createIndex('notifications', { userId: 1, createdAt: -1 }),
+        createIndex('chatThreads', { participantUserIDs: 1, lastMessageAt: -1 }),
+        createIndex('chatThreads', { participantKey: 1 }),
+        createIndex('chatMessages', { threadId: 1, createdAt: -1 }),
       ]);
     }).catch(error => {
       mongoIndexPromise = null;
@@ -943,7 +984,7 @@ app.get('/api/data', async (req, res) => {
         .toArray()
         .then(rows => rows.map(mapMongoTaxCompliance)),
       db.collection<any>('deadlines')
-        .find({}, { projection: { deadlineID: 1, retainerID: 1, serviceID: 1, taxID: 1, dueDate: 1 } })
+        .find({ $or: [{ status: 'Active' }, { status: { $exists: false } }] }, { projection: { deadlineID: 1, retainerID: 1, serviceID: 1, taxID: 1, dueDate: 1, status: 1 } })
         .sort({ deadlineID: 1 })
         .toArray()
         .then(rows => rows.map(mapMongoDeadline)),
@@ -1086,6 +1127,240 @@ app.post('/api/notifications/read-all', async (req, res) => {
     res.json({ success: true, modifiedCount: result.modifiedCount });
   } catch (error: any) {
     console.error('API /api/notifications/read-all error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- Chat Message Endpoints ---
+app.get('/api/chat/threads', async (req, res) => {
+  try {
+    const userId = String(req.query.userId || '').trim();
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '30'), 10) || 30, 1), 50);
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+    const db = await getMongoDb();
+    const threads = await db.collection<any>('chatThreads')
+      .find({ participantUserIDs: userId })
+      .sort({ lastMessageAt: -1, updatedAt: -1 })
+      .limit(limit)
+      .toArray();
+
+    const threadIds = threads.map((thread: any) => thread._id);
+    const unreadRows = threadIds.length > 0
+      ? await db.collection<any>('chatMessages').aggregate([
+          {
+            $match: {
+              threadId: { $in: threadIds },
+              senderUserID: { $ne: userId },
+              readBy: { $ne: userId }
+            }
+          },
+          { $group: { _id: '$threadId', count: { $sum: 1 } } }
+        ]).toArray()
+      : [];
+    const unreadByThread = new Map(unreadRows.map((row: any) => [String(row._id), row.count]));
+
+    res.json(threads.map((thread: any) => mapMongoChatThread(thread, unreadByThread.get(String(thread._id)) || 0)));
+  } catch (error: any) {
+    console.error('API GET /api/chat/threads error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/chat/messages', async (req, res) => {
+  try {
+    const threadId = String(req.query.threadId || '').trim();
+    const userId = String(req.query.userId || '').trim();
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '5'), 10) || 5, 1), 25);
+    const before = String(req.query.before || '').trim();
+    if (!threadId || !userId) return res.status(400).json({ error: 'threadId and userId are required' });
+
+    const db = await getMongoDb();
+    const thread = await db.collection<any>('chatThreads').findOne({ _id: threadId, participantUserIDs: userId });
+    if (!thread) return res.status(404).json({ error: 'Chat thread not found' });
+
+    const query: any = { threadId };
+    if (before) {
+      const beforeDate = new Date(before);
+      if (!isNaN(beforeDate.getTime())) query.createdAt = { $lt: beforeDate };
+    }
+
+    const rows = await db.collection<any>('chatMessages')
+      .find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray();
+
+    res.json(rows.reverse().map(mapMongoChatMessage));
+  } catch (error: any) {
+    console.error('API GET /api/chat/messages error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/chat/messages', async (req, res) => {
+  try {
+    const threadId = String(req.body?.threadId || '').trim();
+    const senderUserID = String(req.body?.senderUserID || '').trim();
+    const message = String(req.body?.message || '').trim();
+    const requestedType = String(req.body?.type || '').trim() === 'group' ? 'group' : 'direct';
+    const threadTitle = String(req.body?.threadTitle || req.body?.title || '').trim();
+    const recipientUserIDs = Array.isArray(req.body?.recipientUserIDs)
+      ? req.body.recipientUserIDs.map((id: any) => String(id || '').trim()).filter(Boolean)
+      : [];
+
+    if (!senderUserID || !message || (!threadId && recipientUserIDs.length === 0)) {
+      return res.status(400).json({ error: 'senderUserID, recipientUserIDs, and message are required' });
+    }
+
+    const db = await getMongoDb();
+    const now = new Date();
+    let thread = threadId
+      ? await db.collection<any>('chatThreads').findOne({ _id: threadId, participantUserIDs: senderUserID })
+      : null;
+
+    if (threadId && !thread) return res.status(404).json({ error: 'Chat thread not found' });
+
+    const participants = thread
+      ? (Array.isArray(thread.participantUserIDs) ? thread.participantUserIDs.map(String) : [])
+      : Array.from(new Set([senderUserID, ...recipientUserIDs])).sort();
+
+    const threadType = thread
+      ? (thread.type || (participants.length > 2 ? 'group' : 'direct'))
+      : (requestedType === 'group' || participants.length > 2 ? 'group' : 'direct');
+
+    if (!thread && threadType === 'group' && participants.length < 3) {
+      return res.status(400).json({ error: 'Group chat needs at least two recipients' });
+    }
+
+    if (!thread && threadType === 'direct') {
+      const participantKey = `direct:${participants.join('|')}`;
+      thread = await db.collection<any>('chatThreads').findOne({ participantKey: { $in: [participantKey, participants.join('|')] } });
+    }
+
+    if (!thread) {
+      const newThreadId = crypto.randomUUID();
+      thread = {
+        _id: newThreadId,
+        type: threadType,
+        threadTitle: threadType === 'group' ? threadTitle : '',
+        participantUserIDs: participants,
+        participantKey: threadType === 'direct' ? `direct:${participants.join('|')}` : `group:${newThreadId}`,
+        createdByUserID: senderUserID,
+        adminUserIDs: threadType === 'group' ? [senderUserID] : [],
+        lastMessage: '',
+        lastSenderUserID: '',
+        lastMessageAt: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await db.collection<any>('chatThreads').insertOne(thread);
+    }
+
+    const messageId = crypto.randomUUID();
+    const messageDoc = {
+      _id: messageId,
+      threadId: thread._id,
+      senderUserID,
+      message,
+      readBy: [senderUserID],
+      createdAt: now,
+    };
+
+    await db.collection<any>('chatMessages').insertOne(messageDoc);
+    await db.collection<any>('chatThreads').updateOne(
+      { _id: thread._id },
+      {
+        $set: {
+          lastMessage: message,
+          lastSenderUserID: senderUserID,
+          lastMessageAt: now,
+          updatedAt: now,
+        }
+      }
+    );
+
+    res.json({ success: true, threadId: thread._id, message: mapMongoChatMessage(messageDoc) });
+  } catch (error: any) {
+    console.error('API POST /api/chat/messages error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/chat/read', async (req, res) => {
+  try {
+    const threadId = String(req.body?.threadId || '').trim();
+    const userId = String(req.body?.userId || '').trim();
+    if (!threadId || !userId) return res.status(400).json({ error: 'threadId and userId are required' });
+
+    const db = await getMongoDb();
+    const result = await db.collection<any>('chatMessages').updateMany(
+      { threadId, senderUserID: { $ne: userId }, readBy: { $ne: userId } },
+      { $addToSet: { readBy: userId } }
+    );
+
+    res.json({ success: true, modifiedCount: result.modifiedCount });
+  } catch (error: any) {
+    console.error('API POST /api/chat/read error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/chat/thread-settings', async (req, res) => {
+  try {
+    const threadId = String(req.body?.threadId || '').trim();
+    const userId = String(req.body?.userId || '').trim();
+    const threadTitle = String(req.body?.threadTitle || '').trim();
+    const participantUserIDs = Array.isArray(req.body?.participantUserIDs)
+      ? req.body.participantUserIDs.map((id: any) => String(id || '').trim()).filter(Boolean)
+      : [];
+    const adminUserIDs = Array.isArray(req.body?.adminUserIDs)
+      ? req.body.adminUserIDs.map((id: any) => String(id || '').trim()).filter(Boolean)
+      : [];
+
+    if (!threadId || !userId) return res.status(400).json({ error: 'threadId and userId are required' });
+
+    const db = await getMongoDb();
+    const thread = await db.collection<any>('chatThreads').findOne({ _id: threadId, participantUserIDs: userId });
+    if (!thread) return res.status(404).json({ error: 'Chat thread not found' });
+
+    const threadType = thread.type || (Array.isArray(thread.participantUserIDs) && thread.participantUserIDs.length > 2 ? 'group' : 'direct');
+    if (threadType !== 'group') return res.status(400).json({ error: 'Only group chats can be updated' });
+
+    const existingParticipants = Array.isArray(thread.participantUserIDs) ? thread.participantUserIDs.map(String) : [];
+    const existingAdmins = Array.isArray(thread.adminUserIDs) && thread.adminUserIDs.length > 0
+      ? thread.adminUserIDs.map(String)
+      : [String(thread.createdByUserID || existingParticipants[0] || userId)];
+
+    if (!existingAdmins.includes(userId)) return res.status(403).json({ error: 'Only group admins can update this chat' });
+
+    const nextParticipants = Array.from(new Set([...(participantUserIDs.length > 0 ? participantUserIDs : existingParticipants)]));
+    if (!nextParticipants.includes(userId)) nextParticipants.push(userId);
+    if (nextParticipants.length < 3) return res.status(400).json({ error: 'Group chat needs at least three members including you' });
+
+    const nextAdmins = Array.from(new Set((adminUserIDs.length > 0 ? adminUserIDs : existingAdmins).filter(id => nextParticipants.includes(id))));
+    if (nextAdmins.length === 0) nextAdmins.push(userId);
+    if (!nextAdmins.includes(userId) && existingAdmins.length === 1 && existingAdmins[0] === userId) {
+      return res.status(400).json({ error: 'Assign another admin before removing yourself as admin' });
+    }
+
+    await db.collection<any>('chatThreads').updateOne(
+      { _id: threadId },
+      {
+        $set: {
+          type: 'group',
+          threadTitle,
+          participantUserIDs: nextParticipants.sort(),
+          adminUserIDs: nextAdmins.sort(),
+          updatedAt: new Date(),
+        }
+      }
+    );
+
+    const updatedThread = await db.collection<any>('chatThreads').findOne({ _id: threadId });
+    res.json({ success: true, thread: mapMongoChatThread(updatedThread, 0) });
+  } catch (error: any) {
+    console.error('API PUT /api/chat/thread-settings error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1329,6 +1604,7 @@ app.put('/api/retainers/:id', async (req, res) => {
                 serviceID: normalizedServiceId,
                 taxID: tax.taxID,
                 dueDate: tax.dueDate,
+                status: 'Active',
                 updatedAt: now,
               }
             }
@@ -1342,6 +1618,7 @@ app.put('/api/retainers/:id', async (req, res) => {
             serviceID: normalizedServiceId,
             taxID: tax.taxID,
             dueDate: tax.dueDate,
+            status: 'Active',
             createdAt: now,
             updatedAt: now,
           });
@@ -1352,7 +1629,10 @@ app.put('/api/retainers/:id', async (req, res) => {
         .filter((deadline: any) => toPaddedId(deadline.serviceID) !== normalizedServiceId || !selectedTaxIds.has(toPaddedId(deadline.taxID)))
         .map((deadline: any) => deadline._id);
       if (removedDeadlineIds.length > 0) {
-        await deadlineCollection.deleteMany({ _id: { $in: removedDeadlineIds } });
+        await deadlineCollection.updateMany(
+          { _id: { $in: removedDeadlineIds } },
+          { $set: { status: 'Inactive', updatedAt: now } }
+        );
       }
     } else if (dueDateCode) {
       const existingDeadline = existingDeadlines.find((deadline: any) => toPaddedId(deadline.serviceID) === normalizedServiceId && !deadline.taxID);
@@ -1365,6 +1645,7 @@ app.put('/api/retainers/:id', async (req, res) => {
               serviceID: normalizedServiceId,
               taxID: '',
               dueDate: dueDateCode,
+              status: 'Active',
               updatedAt: now,
             }
           }
@@ -1378,6 +1659,7 @@ app.put('/api/retainers/:id', async (req, res) => {
           serviceID: normalizedServiceId,
           taxID: '',
           dueDate: dueDateCode,
+          status: 'Active',
           createdAt: now,
           updatedAt: now,
         });
@@ -1387,10 +1669,16 @@ app.put('/api/retainers/:id', async (req, res) => {
         .filter((deadline: any) => deadline._id !== existingDeadline?._id)
         .map((deadline: any) => deadline._id);
       if (removedDeadlineIds.length > 0) {
-        await deadlineCollection.deleteMany({ _id: { $in: removedDeadlineIds } });
+        await deadlineCollection.updateMany(
+          { _id: { $in: removedDeadlineIds } },
+          { $set: { status: 'Inactive', updatedAt: now } }
+        );
       }
     } else {
-      await deadlineCollection.deleteMany({ retainerID: { $in: ids } });
+      await deadlineCollection.updateMany(
+        { retainerID: { $in: ids } },
+        { $set: { status: 'Inactive', updatedAt: now } }
+      );
     }
 
     console.log('[API] Successfully updated retainer and deadlines:', id);
@@ -1470,6 +1758,7 @@ app.post('/api/retainers', async (req, res) => {
             serviceID: normalizedServiceId,
             taxID: tax.taxID,
             dueDate: tax.dueDateCode,
+            status: 'Active',
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -1483,6 +1772,7 @@ app.post('/api/retainers', async (req, res) => {
           serviceID: normalizedServiceId,
           taxID: '',
           dueDate: dueDateCode,
+          status: 'Active',
           createdAt: new Date(),
           updatedAt: new Date(),
         }];

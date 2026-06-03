@@ -23,10 +23,13 @@ interface AppContextType extends AppData {
   logout: () => Promise<void>;
   showToast: (message: string, type: 'success' | 'error') => void;
   playAudioCue: (type: 'success' | 'click' | 'chime', force?: boolean) => void;
+  isIdlePollingPaused: boolean;
   allUsers: User[]; // Rename from 'users' in AppData for clarity if needed, but AppData has 'users'
 }
 
 export const AppContext = createContext<AppContextType | null>(null);
+
+const IDLE_RELOAD_TIMEOUT_MS = 30 * 60 * 1000;
 
 const RootRedirect: React.FC = () => {
   const startTab = localStorage.getItem('startTab') || 'dashboard';
@@ -64,6 +67,7 @@ const App: React.FC = () => {
 
   const [isLoading, setIsLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+  const [isIdlePollingPaused, setIsIdlePollingPaused] = useState(false);
 
   const playAudioCue = useCallback((type: 'success' | 'click' | 'chime', force = false) => {
     const isSoundEnabled = localStorage.getItem('pref_sound') !== 'false';
@@ -182,6 +186,52 @@ const App: React.FC = () => {
           refreshData();
       }
   }, [user, refreshData]);
+
+  useEffect(() => {
+      if (!user) {
+          setIsIdlePollingPaused(false);
+          return;
+      }
+
+      let lastActivityAt = Date.now();
+      let idlePaused = false;
+
+      const reloadIfPaused = () => {
+          if (idlePaused) {
+              window.location.reload();
+              return true;
+          }
+          return false;
+      };
+
+      const recordActivity = () => {
+          if (reloadIfPaused()) return;
+          if (document.hidden) return;
+          lastActivityAt = Date.now();
+      };
+
+      const handleVisibilityChange = () => {
+          if (document.hidden) return;
+          if (reloadIfPaused()) return;
+          lastActivityAt = Date.now();
+      };
+
+      const activityEvents = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart'];
+      activityEvents.forEach(eventName => window.addEventListener(eventName, recordActivity, { passive: true }));
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+
+      const interval = window.setInterval(() => {
+          if (idlePaused || Date.now() - lastActivityAt < IDLE_RELOAD_TIMEOUT_MS) return;
+          idlePaused = true;
+          setIsIdlePollingPaused(true);
+      }, 5000);
+
+      return () => {
+          window.clearInterval(interval);
+          activityEvents.forEach(eventName => window.removeEventListener(eventName, recordActivity));
+          document.removeEventListener('visibilitychange', handleVisibilityChange);
+      };
+  }, [user]);
   
   const contextValue = useMemo(() => ({
       ...appData,
@@ -194,8 +244,9 @@ const App: React.FC = () => {
       refreshData,
       logout: handleLogout,
       showToast,
-      playAudioCue
-  }), [theme, user, appData, isLoading, refreshData, handleLogout, showToast, playAudioCue]);
+      playAudioCue,
+      isIdlePollingPaused
+  }), [theme, user, appData, isLoading, refreshData, handleLogout, showToast, playAudioCue, isIdlePollingPaused]);
 
   return (
     <AppContext.Provider value={contextValue}>
