@@ -172,6 +172,7 @@ const App: React.FC = () => {
           await apiLogout();
       } catch (e) {
       } finally {
+          document.title = 'MPCA Hub | Internal Operations';
           setUser(null);
           localStorage.removeItem('user');
       }

@@ -102,6 +102,20 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
 
   const unreadCount = useMemo(() => threads.reduce((total, thread) => total + (thread.unreadCount || 0), 0), [threads]);
 
+  useEffect(() => {
+    const baseTitle = 'MPCA Hub | Internal Operations';
+    if (unreadCount > 0) {
+      document.title = `(${unreadCount}) New ${unreadCount === 1 ? 'Message' : 'Messages'} - ${baseTitle}`;
+      return () => {
+        document.title = baseTitle;
+      };
+    }
+    document.title = baseTitle;
+    return () => {
+      document.title = baseTitle;
+    };
+  }, [unreadCount]);
+
   const renderChatAvatar = useCallback((user: User | null | undefined, label: string, className = 'w-8 h-8', textClassName = 'text-[10px]', showOnlineDot = true) => {
     const isOwnUser = !!user && String(user.id) === String(currentUser.id);
     const isOnline = showOnlineDot && !!user && !isOwnUser && onlineUserIDs.has(String(user.id));
