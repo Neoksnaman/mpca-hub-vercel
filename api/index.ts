@@ -11,6 +11,7 @@ import { Readable } from 'stream';
 import os from 'os';
 import bcrypt from 'bcryptjs';
 import { MongoClient } from 'mongodb';
+import * as Ably from 'ably';
 
 const app = express();
 
@@ -24,6 +25,7 @@ const REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN;
 const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
 const ROOT_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 const MONGODB_URI = process.env.MONGODB_URI;
+const ABLY_API_KEY = process.env.ABLY_API_KEY;
 
 const auth = new OAuth2Client(CLIENT_ID, CLIENT_SECRET);
 if (REFRESH_TOKEN) {
@@ -34,6 +36,7 @@ const sheets = google.sheets({ version: 'v4', auth });
 const drive = google.drive({ version: 'v3', auth });
 
 let mongoClientPromise: Promise<MongoClient> | null = null;
+let ablyRestClient: Ably.Rest | null = null;
 
 async function getMongoDb() {
   if (!MONGODB_URI) {
@@ -49,6 +52,28 @@ async function getMongoDb() {
 
   const client = await mongoClientPromise;
   return client.db('mpca_app');
+}
+
+function getAblyRestClient() {
+  if (!ABLY_API_KEY) return null;
+  if (!ablyRestClient) {
+    ablyRestClient = new Ably.Rest({ key: ABLY_API_KEY });
+  }
+  return ablyRestClient;
+}
+
+async function publishChatEvent(name: string, data: any) {
+  const ably = getAblyRestClient();
+  if (!ably) return;
+
+  try {
+    await ably.channels.get('mpca:chat').publish(name, {
+      ...data,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn('[Ably] Chat event publish failed:', error);
+  }
 }
 
 app.get('/api/mongo-health', async (req, res) => {
@@ -186,6 +211,17 @@ function mapMongoChatMessage(message: any) {
     senderUserID: message?.senderUserID || '',
     message: message?.message || '',
     readBy: Array.isArray(message?.readBy) ? message.readBy.map(String) : [],
+    reactions: Array.isArray(message?.reactions)
+      ? message.reactions
+          .filter((reaction: any) => reaction?.userId && reaction?.reaction)
+          .map((reaction: any) => ({
+            userId: String(reaction.userId),
+            reaction: String(reaction.reaction),
+            reactedAt: reaction?.reactedAt instanceof Date
+              ? reaction.reactedAt.toISOString()
+              : reaction?.reactedAt || ''
+          }))
+      : [],
     createdAt: message?.createdAt instanceof Date
       ? message.createdAt.toISOString()
       : message?.createdAt || ''
@@ -1131,6 +1167,29 @@ app.post('/api/notifications/read-all', async (req, res) => {
   }
 });
 
+app.get('/api/ably-token', async (req, res) => {
+  try {
+    const requestUser = await getRequestUser(req);
+    if (!requestUser) return res.status(401).json({ error: 'Unauthorized' });
+
+    const ably = getAblyRestClient();
+    if (!ably) return res.status(503).json({ error: 'Ably is not configured' });
+
+    const clientId = String((requestUser as any).userID || (requestUser as any)._id || '');
+    const tokenRequest = await ably.auth.createTokenRequest({
+      clientId,
+      capability: JSON.stringify({
+        'mpca:chat': ['subscribe', 'presence'],
+      }),
+    });
+
+    res.json(tokenRequest);
+  } catch (error: any) {
+    console.error('API GET /api/ably-token error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // --- Chat Message Endpoints ---
 app.get('/api/chat/threads', async (req, res) => {
   try {
@@ -1264,6 +1323,7 @@ app.post('/api/chat/messages', async (req, res) => {
       senderUserID,
       message,
       readBy: [senderUserID],
+      reactions: [],
       createdAt: now,
     };
 
@@ -1280,9 +1340,63 @@ app.post('/api/chat/messages', async (req, res) => {
       }
     );
 
+    await publishChatEvent('chat.message.created', {
+      threadId: thread._id,
+      senderUserID,
+      participantUserIDs: participants,
+      messageId,
+    });
+
     res.json({ success: true, threadId: thread._id, message: mapMongoChatMessage(messageDoc) });
   } catch (error: any) {
     console.error('API POST /api/chat/messages error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/chat/reactions', async (req, res) => {
+  try {
+    const messageId = String(req.body?.messageId || '').trim();
+    const userId = String(req.body?.userId || '').trim();
+    const reaction = String(req.body?.reaction || '').trim();
+    const allowedReactions = new Set(['👍', '❤️', '😂', '😮', '😢', '🙏']);
+
+    if (!messageId || !userId) return res.status(400).json({ error: 'messageId and userId are required' });
+    if (reaction && !allowedReactions.has(reaction)) return res.status(400).json({ error: 'Invalid reaction' });
+
+    const db = await getMongoDb();
+    const message = await db.collection<any>('chatMessages').findOne({ _id: messageId });
+    if (!message) return res.status(404).json({ error: 'Chat message not found' });
+
+    const thread = await db.collection<any>('chatThreads').findOne({ _id: message.threadId, participantUserIDs: userId });
+    if (!thread) return res.status(404).json({ error: 'Chat thread not found' });
+
+    await db.collection<any>('chatMessages').updateOne(
+      { _id: messageId },
+      { $pull: { reactions: { userId } } } as any
+    );
+
+    if (reaction) {
+      await db.collection<any>('chatMessages').updateOne(
+        { _id: messageId },
+        { $push: { reactions: { userId, reaction, reactedAt: new Date() } } } as any
+      );
+    }
+
+    const updatedMessage = await db.collection<any>('chatMessages').findOne({ _id: messageId });
+    const mappedMessage = mapMongoChatMessage(updatedMessage);
+    await publishChatEvent('chat.message.reacted', {
+      threadId: mappedMessage.threadId,
+      messageId,
+      userId,
+      reaction,
+      message: mappedMessage,
+      participantUserIDs: Array.isArray(thread.participantUserIDs) ? thread.participantUserIDs.map(String) : [],
+    });
+
+    res.json({ success: true, message: mappedMessage });
+  } catch (error: any) {
+    console.error('API POST /api/chat/reactions error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1298,6 +1412,15 @@ app.post('/api/chat/read', async (req, res) => {
       { threadId, senderUserID: { $ne: userId }, readBy: { $ne: userId } },
       { $addToSet: { readBy: userId } }
     );
+
+    if (result.modifiedCount > 0) {
+      const thread = await db.collection<any>('chatThreads').findOne({ _id: threadId });
+      await publishChatEvent('chat.thread.read', {
+        threadId,
+        readerUserID: userId,
+        participantUserIDs: Array.isArray(thread?.participantUserIDs) ? thread.participantUserIDs.map(String) : [],
+      });
+    }
 
     res.json({ success: true, modifiedCount: result.modifiedCount });
   } catch (error: any) {
@@ -1358,6 +1481,11 @@ app.put('/api/chat/thread-settings', async (req, res) => {
     );
 
     const updatedThread = await db.collection<any>('chatThreads').findOne({ _id: threadId });
+    await publishChatEvent('chat.thread.updated', {
+      threadId,
+      updatedByUserID: userId,
+      participantUserIDs: Array.isArray(updatedThread?.participantUserIDs) ? updatedThread.participantUserIDs.map(String) : [],
+    });
     res.json({ success: true, thread: mapMongoChatThread(updatedThread, 0) });
   } catch (error: any) {
     console.error('API PUT /api/chat/thread-settings error:', error);

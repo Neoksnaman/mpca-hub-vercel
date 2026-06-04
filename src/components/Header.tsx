@@ -291,7 +291,7 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
             {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
           </button>
 
-          {user && <ChatMessages currentUser={user} users={context.users || []} pollingPaused={context.isIdlePollingPaused} />}
+          {user && <ChatMessages currentUser={user} users={context.users || []} pollingPaused={context.isIdlePollingPaused} onlineUserIDs={context.onlineUserIDs} ablyRealtime={context.ablyRealtime} />}
           
           <div className="relative" ref={notifRef}>
             <button 
@@ -362,17 +362,19 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
           
           <div className="relative" ref={dropdownRef}>
             <button onClick={() => setDropdownOpen(!dropdownOpen)} className="flex items-center space-x-2">
-                {user?.avatarUrl && user.avatarUrl.trim() !== '' ? (
-                  <img
-                    src={user.avatarUrl}
-                    alt="User Avatar"
-                    className="w-8 h-8 rounded-full border border-neutral-medium object-cover"
-                  />
-                ) : (
-                  <div className="w-8 h-8 rounded-full border border-neutral-medium bg-primary text-white flex items-center justify-center font-bold text-sm">
-                    {user?.firstName?.charAt(0).toUpperCase() || 'G'}
-                  </div>
-                )}
+                <span className="relative inline-flex w-8 h-8 shrink-0">
+                  {user?.avatarUrl && user.avatarUrl.trim() !== '' ? (
+                    <img
+                      src={user.avatarUrl}
+                      alt="User Avatar"
+                      className="w-8 h-8 rounded-full border border-neutral-medium object-cover"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full border border-neutral-medium bg-primary text-white flex items-center justify-center font-bold text-sm">
+                      {user?.firstName?.charAt(0).toUpperCase() || 'G'}
+                    </div>
+                  )}
+                </span>
                 <div className="hidden md:block text-left">
                   <p className="font-semibold text-sm text-neutral-dark dark:text-neutral-light">{user?.firstName || 'Guest'}</p>
                   <p className="text-xs text-secondary dark:text-gray-400">{user?.role || 'User'}</p>

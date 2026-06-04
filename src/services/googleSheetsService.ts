@@ -235,6 +235,12 @@ export const markChatThreadRead = (threadId: string, userId: string) =>
         body: JSON.stringify({ threadId, userId })
     });
 
+export const toggleChatReaction = (messageId: string, userId: string, reaction: string) =>
+    apiCall<{ success: boolean; message: ChatMessage }>('/api/chat/reactions', {
+        method: 'POST',
+        body: JSON.stringify({ messageId, userId, reaction })
+    });
+
 export const updateChatThreadSettings = (data: { threadId: string; userId: string; threadTitle: string; participantUserIDs: string[]; adminUserIDs: string[] }) =>
     apiCall<{ success: boolean; thread: ChatThread }>('/api/chat/thread-settings', {
         method: 'PUT',

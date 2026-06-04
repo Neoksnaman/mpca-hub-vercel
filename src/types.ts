@@ -181,6 +181,11 @@ export interface ChatMessage {
   senderUserID: string;
   message: string;
   readBy: string[];
+  reactions?: {
+    userId: string;
+    reaction: string;
+    reactedAt: string;
+  }[];
   createdAt: string;
 }
 

@@ -1,5 +1,6 @@
 import React, { useState, createContext, useMemo, useEffect, useCallback } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import * as Ably from 'ably';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './pages/Dashboard';
@@ -24,6 +25,8 @@ interface AppContextType extends AppData {
   showToast: (message: string, type: 'success' | 'error') => void;
   playAudioCue: (type: 'success' | 'click' | 'chime', force?: boolean) => void;
   isIdlePollingPaused: boolean;
+  onlineUserIDs: Set<string>;
+  ablyRealtime: Ably.Realtime | null;
   allUsers: User[]; // Rename from 'users' in AppData for clarity if needed, but AppData has 'users'
 }
 
@@ -68,6 +71,8 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [isIdlePollingPaused, setIsIdlePollingPaused] = useState(false);
+  const [onlineUserIDs, setOnlineUserIDs] = useState<Set<string>>(new Set());
+  const [ablyRealtime, setAblyRealtime] = useState<Ably.Realtime | null>(null);
 
   const playAudioCue = useCallback((type: 'success' | 'click' | 'chime', force = false) => {
     const isSoundEnabled = localStorage.getItem('pref_sound') !== 'false';
@@ -232,6 +237,55 @@ const App: React.FC = () => {
           document.removeEventListener('visibilitychange', handleVisibilityChange);
       };
   }, [user]);
+
+  useEffect(() => {
+      if (!user || isIdlePollingPaused) {
+          setOnlineUserIDs(new Set());
+          setAblyRealtime(null);
+          return;
+      }
+
+      let closed = false;
+      const realtime = new Ably.Realtime({
+          authUrl: '/api/ably-token',
+          clientId: user.id,
+      });
+      setAblyRealtime(realtime);
+      const channel = realtime.channels.get('mpca:chat');
+
+      const refreshPresence = async () => {
+          try {
+              const members = await channel.presence.get();
+              if (closed) return;
+              const ids = new Set<string>();
+              members.forEach(member => {
+                  const data = (member.data || {}) as { userId?: string };
+                  const id = String(data.userId || member.clientId || '');
+                  if (id) ids.add(id);
+              });
+              setOnlineUserIDs(ids);
+          } catch (err) {
+          }
+      };
+
+      const handlePresenceEvent = () => {
+          refreshPresence();
+      };
+
+      channel.presence.subscribe(['enter', 'leave', 'update'], handlePresenceEvent);
+      channel.presence.enter({
+          userId: user.id,
+          name: `${user.firstName} ${user.lastName}`.trim(),
+      }).then(refreshPresence).catch(() => {});
+
+      return () => {
+          closed = true;
+          channel.presence.unsubscribe(['enter', 'leave', 'update'], handlePresenceEvent);
+          channel.presence.leave().catch(() => {});
+          setAblyRealtime(null);
+          realtime.close();
+      };
+  }, [user, isIdlePollingPaused]);
   
   const contextValue = useMemo(() => ({
       ...appData,
@@ -245,8 +299,10 @@ const App: React.FC = () => {
       logout: handleLogout,
       showToast,
       playAudioCue,
-      isIdlePollingPaused
-  }), [theme, user, appData, isLoading, refreshData, handleLogout, showToast, playAudioCue, isIdlePollingPaused]);
+      isIdlePollingPaused,
+      onlineUserIDs,
+      ablyRealtime
+  }), [theme, user, appData, isLoading, refreshData, handleLogout, showToast, playAudioCue, isIdlePollingPaused, onlineUserIDs, ablyRealtime]);
 
   return (
     <AppContext.Provider value={contextValue}>

@@ -1,12 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronLeft, MessageCircle, Plus, Search, Send, Settings, X } from 'lucide-react';
+import { Check, ChevronLeft, MessageCircle, Plus, Search, Send, Settings, SmilePlus, X } from 'lucide-react';
+import * as Ably from 'ably';
 import { ChatMessage, ChatThread, User } from '../types';
-import { fetchChatMessages, fetchChatThreads, markChatThreadRead, sendChatMessage, updateChatThreadSettings } from '../services/googleSheetsService';
+import { fetchChatMessages, fetchChatThreads, markChatThreadRead, sendChatMessage, toggleChatReaction, updateChatThreadSettings } from '../services/googleSheetsService';
 
 interface ChatMessagesProps {
   currentUser: User;
   users: User[];
   pollingPaused?: boolean;
+  onlineUserIDs?: Set<string>;
+  ablyRealtime?: Ably.Realtime | null;
 }
 
 const formatTime = (value: string) => {
@@ -17,8 +20,11 @@ const formatTime = (value: string) => {
 };
 
 const fullName = (user?: User) => user ? `${user.firstName} ${user.lastName}`.trim() : 'Unknown User';
+const CHAT_POLLING_FALLBACK_ENABLED = true;
+const CHAT_POLLING_FALLBACK_INTERVAL_MS = 5 * 60 * 1000;
+const CHAT_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
-const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, pollingPaused = false }) => {
+const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, pollingPaused = false, onlineUserIDs = new Set(), ablyRealtime = null }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [composeMode, setComposeMode] = useState(false);
@@ -39,9 +45,36 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasOlder, setHasOlder] = useState(true);
+  const [reactionPickerMessageId, setReactionPickerMessageId] = useState<string | null>(null);
+  const [reactionPickerDirection, setReactionPickerDirection] = useState<'top' | 'bottom'>('top');
+  const [reactionPickerHorizontal, setReactionPickerHorizontal] = useState<'left' | 'right'>('right');
+  const [savingReactionId, setSavingReactionId] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const reactionPickerRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const scrollToLatestPendingRef = useRef(false);
+  const activeThreadRef = useRef<ChatThread | null>(null);
+  const chatOpenRef = useRef(false);
+  const composeModeRef = useRef(false);
+  const loadingOlderRef = useRef(false);
+  const fallbackPollTimerRef = useRef<number | null>(null);
+  const resetChatFallbackTimerRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    activeThreadRef.current = activeThread;
+  }, [activeThread]);
+
+  useEffect(() => {
+    chatOpenRef.current = chatOpen;
+  }, [chatOpen]);
+
+  useEffect(() => {
+    composeModeRef.current = composeMode;
+  }, [composeMode]);
+
+  useEffect(() => {
+    loadingOlderRef.current = loadingOlder;
+  }, [loadingOlder]);
 
   const userById = useMemo(() => {
     const lookup = new Map<string, User>();
@@ -68,6 +101,37 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
   }, [activeUsers, search]);
 
   const unreadCount = useMemo(() => threads.reduce((total, thread) => total + (thread.unreadCount || 0), 0), [threads]);
+
+  const renderChatAvatar = useCallback((user: User | null | undefined, label: string, className = 'w-8 h-8', textClassName = 'text-[10px]', showOnlineDot = true) => {
+    const isOwnUser = !!user && String(user.id) === String(currentUser.id);
+    const isOnline = showOnlineDot && !!user && !isOwnUser && onlineUserIDs.has(String(user.id));
+    return (
+      <span className={`relative inline-flex shrink-0 items-center justify-center rounded-full bg-white align-middle dark:bg-gray-900 ${className}`}>
+        {user?.avatarUrl ? (
+          <img src={user.avatarUrl} alt={label} className="block h-full w-full rounded-full border border-neutral-medium object-cover" />
+        ) : (
+          <span className={`h-full w-full rounded-full border border-neutral-medium bg-primary/10 text-primary flex items-center justify-center font-black ${textClassName}`}>
+            {(label || 'U').charAt(0)}
+          </span>
+        )}
+        {isOnline && (
+          <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-white bg-emerald-500 shadow-sm dark:border-gray-800" />
+        )}
+      </span>
+    );
+  }, [currentUser.id, onlineUserIDs]);
+
+  const getReactionSummary = useCallback((message: ChatMessage) => {
+    const grouped = new Map<string, { reaction: string; count: number; userNames: string[]; mine: boolean }>();
+    (message.reactions || []).forEach(item => {
+      const current = grouped.get(item.reaction) || { reaction: item.reaction, count: 0, userNames: [], mine: false };
+      current.count += 1;
+      current.mine = current.mine || String(item.userId) === String(currentUser.id);
+      current.userNames.push(fullName(userById.get(String(item.userId))));
+      grouped.set(item.reaction, current);
+    });
+    return Array.from(grouped.values());
+  }, [currentUser.id, userById]);
 
   const isActiveGroupAdmin = useMemo(() => (
     !!activeThread &&
@@ -129,55 +193,140 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
     }
   }, [currentUser.id, pollingPaused]);
 
+  const refreshActiveThreadMessages = useCallback(async (threadId: string, markRead = false) => {
+    if (pollingPaused || loadingOlderRef.current) return;
+    const active = activeThreadRef.current;
+    if (!active || active.id !== threadId) return;
+
+    const list = messageListRef.current;
+    const isNearLatest = list ? list.scrollHeight - list.scrollTop - list.clientHeight < 80 : true;
+    const latest = await fetchChatMessages(threadId, currentUser.id, 10);
+
+    setMessages(prev => {
+      const existingIds = new Set(prev.map(message => message.id));
+      const newMessages = latest.filter(message => !existingIds.has(message.id));
+      if (newMessages.length > 0 && isNearLatest) {
+        scrollToLatestPendingRef.current = true;
+      }
+      const latestById = new Map(latest.map(message => [message.id, message]));
+      let changed = newMessages.length > 0;
+      const mergedMessages = prev.map(message => {
+        const updatedMessage = latestById.get(message.id);
+        if (!updatedMessage) return message;
+        if (JSON.stringify(updatedMessage.readBy || []) !== JSON.stringify(message.readBy || [])) {
+          changed = true;
+        }
+        return { ...message, ...updatedMessage };
+      });
+      return changed ? [...mergedMessages, ...newMessages] : prev;
+    });
+
+    if (markRead) {
+      await markChatThreadRead(threadId, currentUser.id);
+    }
+  }, [currentUser.id, pollingPaused]);
+
   useEffect(() => {
     loadThreads();
   }, [loadThreads]);
 
+  const runChatFallbackPoll = useCallback(async () => {
+    if (pollingPaused) return;
+    await loadThreads(true);
+    const active = activeThreadRef.current;
+    if (document.hidden || !chatOpenRef.current || composeModeRef.current || loadingOlderRef.current || !active) return;
+    await refreshActiveThreadMessages(active.id, true);
+  }, [loadThreads, pollingPaused, refreshActiveThreadMessages]);
+
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (pollingPaused) return;
-      loadThreads(true);
-    }, 30000);
+    if (!CHAT_POLLING_FALLBACK_ENABLED) return;
 
-    return () => window.clearInterval(interval);
-  }, [loadThreads, pollingPaused]);
-
-  useEffect(() => {
-    if (pollingPaused || !chatOpen || !activeThread || composeMode) return;
-
-    const interval = window.setInterval(async () => {
-      if (document.hidden || loadingOlder) return;
-      try {
-        const list = messageListRef.current;
-        const isNearLatest = list ? list.scrollHeight - list.scrollTop - list.clientHeight < 80 : true;
-        const latest = await fetchChatMessages(activeThread.id, currentUser.id, 10);
-        setMessages(prev => {
-          const existingIds = new Set(prev.map(message => message.id));
-          const newMessages = latest.filter(message => !existingIds.has(message.id));
-          if (newMessages.length > 0 && isNearLatest) {
-            scrollToLatestPendingRef.current = true;
-          }
-          const latestById = new Map(latest.map(message => [message.id, message]));
-          let changed = newMessages.length > 0;
-          const mergedMessages = prev.map(message => {
-            const updatedMessage = latestById.get(message.id);
-            if (!updatedMessage) return message;
-            if (JSON.stringify(updatedMessage.readBy || []) !== JSON.stringify(message.readBy || [])) {
-              changed = true;
-            }
-            return { ...message, ...updatedMessage };
-          });
-          return changed ? [...mergedMessages, ...newMessages] : prev;
-        });
-        await markChatThreadRead(activeThread.id, currentUser.id);
-        loadThreads(true);
-      } catch (err) {
-        // Keep chat polling quiet so a transient API issue does not interrupt browsing.
+    const clearFallbackTimer = () => {
+      if (fallbackPollTimerRef.current) {
+        window.clearTimeout(fallbackPollTimerRef.current);
+        fallbackPollTimerRef.current = null;
       }
-    }, 10000);
+    };
 
-    return () => window.clearInterval(interval);
-  }, [activeThread, chatOpen, composeMode, currentUser.id, loadThreads, loadingOlder, pollingPaused]);
+    const scheduleFallbackPoll = () => {
+      clearFallbackTimer();
+      fallbackPollTimerRef.current = window.setTimeout(async () => {
+        try {
+          await runChatFallbackPoll();
+        } finally {
+          scheduleFallbackPoll();
+        }
+      }, CHAT_POLLING_FALLBACK_INTERVAL_MS);
+    };
+
+    resetChatFallbackTimerRef.current = scheduleFallbackPoll;
+    scheduleFallbackPoll();
+
+    return () => {
+      clearFallbackTimer();
+      resetChatFallbackTimerRef.current = null;
+    };
+  }, [runChatFallbackPoll]);
+
+  useEffect(() => {
+    if (pollingPaused || !ablyRealtime) return;
+
+    let closed = false;
+    const channel = ablyRealtime.channels.get('mpca:chat');
+
+    const handleChatEvent = async (message: Ably.Message) => {
+      if (closed) return;
+      const data = (message.data || {}) as {
+        threadId?: string;
+        senderUserID?: string;
+        updatedByUserID?: string;
+        readerUserID?: string;
+        participantUserIDs?: string[];
+        message?: ChatMessage;
+      };
+      const participants = (data.participantUserIDs || []).map(String);
+      if (!participants.includes(String(currentUser.id))) return;
+      resetChatFallbackTimerRef.current?.();
+
+      try {
+        if (message.name === 'chat.message.created') {
+          await loadThreads(true);
+          if (
+            data.threadId &&
+            chatOpenRef.current &&
+            !composeModeRef.current &&
+            activeThreadRef.current?.id === data.threadId
+          ) {
+            await refreshActiveThreadMessages(data.threadId, String(data.senderUserID) !== String(currentUser.id));
+          }
+        } else if (message.name === 'chat.thread.updated') {
+          const latestThreads = await fetchChatThreads(currentUser.id);
+          setThreads(latestThreads);
+          const updatedThread = latestThreads.find(thread => thread.id === data.threadId);
+          if (updatedThread && activeThreadRef.current?.id === updatedThread.id) {
+            setActiveThread(updatedThread);
+          }
+        } else if (message.name === 'chat.thread.read') {
+          if (data.threadId && activeThreadRef.current?.id === data.threadId) {
+            await refreshActiveThreadMessages(data.threadId, false);
+          }
+        } else if (message.name === 'chat.message.reacted') {
+          if (data.threadId && data.message && activeThreadRef.current?.id === data.threadId) {
+            setMessages(prev => prev.map(item => item.id === data.message?.id ? data.message : item));
+          }
+        }
+      } catch (err) {
+        // Polling remains as fallback if a realtime refresh fails.
+      }
+    };
+
+    channel.subscribe(handleChatEvent);
+
+    return () => {
+      closed = true;
+      channel.unsubscribe(handleChatEvent);
+    };
+  }, [ablyRealtime, currentUser.id, loadThreads, pollingPaused, refreshActiveThreadMessages]);
 
   useEffect(() => {
     if (!scrollToLatestPendingRef.current || loadingMessages) return;
@@ -196,6 +345,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setDropdownOpen(false);
+      }
+      if (reactionPickerRef.current && !reactionPickerRef.current.contains(event.target as Node)) {
+        setReactionPickerMessageId(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -314,6 +466,42 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
     }
   };
 
+  const handleReaction = async (message: ChatMessage, reaction: string) => {
+    if (savingReactionId) return;
+    const existingReaction = (message.reactions || []).find(item => String(item.userId) === String(currentUser.id));
+    const nextReaction = existingReaction?.reaction === reaction ? '' : reaction;
+    setSavingReactionId(message.id);
+    setReactionPickerMessageId(null);
+    try {
+      const result = await toggleChatReaction(message.id, currentUser.id, nextReaction);
+      setMessages(prev => prev.map(item => item.id === result.message.id ? result.message : item));
+    } finally {
+      setSavingReactionId(null);
+    }
+  };
+
+  const toggleReactionPicker = (messageId: string, event: React.MouseEvent<HTMLButtonElement>, mine: boolean) => {
+    if (reactionPickerMessageId === messageId) {
+      setReactionPickerMessageId(null);
+      return;
+    }
+
+    const buttonRect = event.currentTarget.getBoundingClientRect();
+    const listRect = messageListRef.current?.getBoundingClientRect();
+    const pickerWidth = 236;
+    const topSpace = buttonRect.top - (listRect?.top || 0);
+    const availableLeft = buttonRect.right - (listRect?.left || 0);
+    const availableRight = (listRect?.right || window.innerWidth) - buttonRect.left;
+    const preferredHorizontal = mine ? 'left' : 'right';
+    const nextHorizontal = preferredHorizontal === 'right'
+      ? (availableRight < pickerWidth && availableLeft >= pickerWidth ? 'left' : 'right')
+      : (availableLeft < pickerWidth && availableRight >= pickerWidth ? 'right' : 'left');
+
+    setReactionPickerDirection(topSpace < 48 ? 'bottom' : 'top');
+    setReactionPickerHorizontal(nextHorizontal);
+    setReactionPickerMessageId(messageId);
+  };
+
   const handleSend = async () => {
     if (pollingPaused) return;
     const text = draft.trim();
@@ -398,8 +586,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                       onClick={() => openThread(thread)}
                       className={`w-full flex items-start gap-3 p-4 text-left transition-colors border-b border-neutral-medium/30 dark:border-gray-700/30 hover:bg-neutral-light/50 dark:hover:bg-gray-700/50 ${isUnread ? 'bg-[#1a73e8]/5 dark:bg-[#1a73e8]/10' : ''}`}
                     >
-                      {avatarUser?.avatarUrl ? (
-                        <img src={avatarUser.avatarUrl} alt={fullName(avatarUser)} className="mt-0.5 w-8 h-8 rounded-full border border-neutral-medium object-cover shrink-0" />
+                      {thread.type !== 'group' && avatarUser ? (
+                        <span className="mt-0.5">{renderChatAvatar(avatarUser, fullName(avatarUser))}</span>
                       ) : thread.type === 'group' ? (
                         <div className="mt-0.5 w-8 h-8 rounded-full border border-primary/20 bg-primary/10 text-primary flex items-center justify-center shrink-0">
                           <MessageCircle size={14} />
@@ -487,9 +675,12 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                       disabled={!canToggleMember}
                       className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-left border-b border-neutral-medium/30 last:border-b-0 transition-colors ${canToggleMember ? 'hover:bg-neutral-light/70 dark:hover:bg-gray-700/50' : 'cursor-default'}`}
                     >
-                      <span className={`text-xs font-bold ${isMember ? 'text-neutral-dark dark:text-white' : 'text-secondary'}`}>
-                        {fullName(user)}
-                        {String(user.id) === String(currentUser.id) && <span className="ml-1 text-[9px] text-primary">You</span>}
+                      <span className="flex items-center gap-2 min-w-0">
+                        {renderChatAvatar(user, fullName(user), 'w-6 h-6', 'text-[8px]')}
+                        <span className={`text-xs font-bold truncate ${isMember ? 'text-neutral-dark dark:text-white' : 'text-secondary'}`}>
+                          {fullName(user)}
+                          {String(user.id) === String(currentUser.id) && <span className="ml-1 text-[9px] text-primary">You</span>}
+                        </span>
                       </span>
                       <div className="flex items-center gap-2">
                         {isMember && (
@@ -622,34 +813,79 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                 {messages.map(message => {
                   const mine = String(message.senderUserID) === String(currentUser.id);
                   const readIndicatorUsers = readIndicatorsByMessageId.get(message.id) || [];
+                  const reactionSummary = getReactionSummary(message);
+                  const myReaction = (message.reactions || []).find(item => String(item.userId) === String(currentUser.id))?.reaction || '';
                   return (
-                    <div key={message.id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                      <div className={`max-w-[78%] rounded-2xl px-4 py-2 shadow-sm ${mine ? 'bg-primary text-white rounded-br-md' : 'bg-white dark:bg-gray-800 text-neutral-dark dark:text-white border border-neutral-medium/70 dark:border-gray-700 rounded-bl-md'}`}>
-                        {!mine && <p className="text-[9px] font-black text-secondary mb-1">{fullName(userById.get(String(message.senderUserID)))}</p>}
-                        <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap">{message.message}</p>
-                        <p className={`text-[9px] font-bold mt-1 ${mine ? 'text-right text-white/70' : 'text-secondary/60'}`}>{formatTime(message.createdAt)}</p>
+                    <div key={message.id} className={`group/message flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                      <div className={`relative max-w-[78%] ${mine ? 'items-end' : 'items-start'}`}>
+                        <div ref={reactionPickerMessageId === message.id ? reactionPickerRef : undefined} className={`absolute top-1/2 z-20 -translate-y-1/2 ${mine ? '-left-9' : '-right-9'}`}>
+                          {reactionPickerMessageId === message.id && (
+                            <div className={`absolute flex rounded-full border border-neutral-medium bg-white p-1 shadow-xl dark:border-gray-700 dark:bg-gray-800 ${reactionPickerDirection === 'top' ? 'bottom-9' : 'top-9'} ${reactionPickerHorizontal === 'left' ? 'right-0' : 'left-0'}`}>
+                              {CHAT_REACTIONS.map(reaction => (
+                                <button
+                                  key={reaction}
+                                  type="button"
+                                  disabled={savingReactionId === message.id}
+                                  onClick={() => handleReaction(message, reaction)}
+                                  className={`h-8 w-8 rounded-full text-base transition-transform hover:scale-125 disabled:opacity-50 ${myReaction === reaction ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}
+                                  title={myReaction === reaction ? 'Remove reaction' : `React ${reaction}`}
+                                >
+                                  {reaction}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(event) => toggleReactionPicker(message.id, event, mine)}
+                            className={`h-7 w-7 rounded-full border border-neutral-medium bg-white text-secondary shadow-md transition-all hover:border-primary hover:text-primary dark:border-gray-700 dark:bg-gray-800 ${reactionPickerMessageId === message.id ? 'opacity-100 scale-100' : 'opacity-0 scale-95 group-hover/message:opacity-100 group-hover/message:scale-100'}`}
+                            title="React to message"
+                          >
+                            <SmilePlus size={14} className="mx-auto" />
+                          </button>
+                        </div>
+                        <div className={`rounded-2xl px-4 py-2 shadow-sm ${reactionSummary.length > 0 ? 'pb-4' : ''} ${mine ? 'bg-primary text-white rounded-br-md' : 'bg-white dark:bg-gray-800 text-neutral-dark dark:text-white border border-neutral-medium/70 dark:border-gray-700 rounded-bl-md'}`}>
+                          {!mine && <p className="text-[9px] font-black text-secondary mb-1">{fullName(userById.get(String(message.senderUserID)))}</p>}
+                          <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap">{message.message}</p>
+                          <p className={`text-[9px] font-bold mt-1 ${mine ? 'text-right text-white/70' : 'text-secondary/60'}`}>{formatTime(message.createdAt)}</p>
+                        </div>
+                        {reactionSummary.length > 0 && (
+                          <div className={`absolute -bottom-3 flex ${mine ? 'right-2 justify-end' : 'left-2 justify-start'}`}>
+                            {reactionSummary.length === 1 ? reactionSummary.map(item => (
+                              <button
+                                key={item.reaction}
+                                type="button"
+                                onClick={() => item.mine && handleReaction(message, item.reaction)}
+                                className={`flex h-6 min-w-6 items-center justify-center rounded-full border bg-white px-1 text-[11px] font-black shadow-sm transition-colors dark:bg-gray-800 ${item.mine ? 'border-primary/40 text-primary hover:bg-primary/10' : 'border-neutral-medium text-secondary dark:border-gray-700'}`}
+                                title={item.userNames.join(', ')}
+                              >
+                                <span>{item.reaction}</span>{item.count > 1 ? <span className="ml-0.5 text-[8px]">{item.count}</span> : ''}
+                              </button>
+                            )) : (
+                              <div className="flex rounded-full border border-neutral-medium bg-white px-1.5 py-0.5 text-[10px] font-black text-secondary shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                                {reactionSummary.map(item => (
+                                  <button
+                                    key={item.reaction}
+                                    type="button"
+                                    onClick={() => item.mine && handleReaction(message, item.reaction)}
+                                    className={`flex h-5 items-center rounded-full px-1 transition-colors ${item.mine ? 'text-primary hover:bg-primary/10' : ''}`}
+                                    title={item.userNames.join(', ')}
+                                  >
+                                    <span>{item.reaction}</span>{item.count > 1 ? <span className="ml-0.5 text-[8px]">{item.count}</span> : ''}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                       {readIndicatorUsers.length > 0 && (
-                        <div className="mt-1 w-full flex justify-end">
-                          <div className="flex -space-x-1">
+                        <div className={`${reactionSummary.length > 0 ? 'mt-3' : 'mt-1'} w-full flex justify-end pr-1`}>
+                          <div className="flex items-center gap-0.5">
                             {readIndicatorUsers.slice(0, 5).map(user => (
-                              user.avatarUrl ? (
-                                <img
-                                  key={user.id}
-                                  src={user.avatarUrl}
-                                  alt={`${fullName(user)} read this message`}
-                                  title={`${fullName(user)} read this message`}
-                                  className="h-4 w-4 rounded-full border border-white object-cover shadow-sm"
-                                />
-                              ) : (
-                                <div
-                                  key={user.id}
-                                  title={`${fullName(user)} read this message`}
-                                  className="h-4 w-4 rounded-full border border-white bg-primary/10 text-[7px] font-black text-primary flex items-center justify-center shadow-sm"
-                                >
-                                  {fullName(user).charAt(0)}
-                                </div>
-                              )
+                              <span key={user.id} title={`${fullName(user)} read this message`} className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white ring-1 ring-white dark:bg-gray-900 dark:ring-gray-900">
+                                {renderChatAvatar(user, fullName(user), 'w-4 h-4', 'text-[7px]', false)}
+                              </span>
                             ))}
                           </div>
                         </div>
