@@ -9,6 +9,14 @@ import { Client, Notification, RetainerEngagement } from '../types';
 
 const AUTO_NOTIF_IDS = ['approaching-deadlines', 'overdue-deadlines', 'transmittal-upload-warning'];
 
+const normalizePeriodKey = (year: number, monthIndex: number) => year * 12 + monthIndex;
+
+const isPeriodBeforeRetainerStart = (startDate: string, monthIndex: number, year: number) => {
+  const start = parseDateStr(startDate);
+  if (!start) return false;
+  return normalizePeriodKey(year, monthIndex) < normalizePeriodKey(start.getFullYear(), start.getMonth());
+};
+
 interface HeaderProps {
   isSidebarOpen: boolean;
   setIsSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -147,6 +155,8 @@ const Header: React.FC<HeaderProps> = ({ isSidebarOpen, setIsSidebarOpen }) => {
 
           monthsToCheck.forEach(({ month, monthIdx, year }) => {
               const currentMonthNum = monthIdx + 1;
+              if (isPeriodBeforeRetainerStart(retainer.startDate, monthIdx, year)) return;
+
               const fyMonth = isCalendarOnly ? 12 : (client?.fiscalYearEnd ? parseInt(client.fiscalYearEnd.split('/')[0], 10) : 12);
 
               if (['1', '2'].includes(normalizedTaxID) && [3, 6, 9, 12].includes(currentMonthNum)) return;

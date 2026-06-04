@@ -29,6 +29,33 @@ const normalizeId = (id: any) => String(id || '').trim().replace(/^0+/, '') || '
 
 const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
+const parseRetainerStartDate = (dateStr: string): Date | null => {
+    if (!dateStr) return null;
+    const date = dateStr.includes('/')
+        ? (() => {
+            const [m, d, y] = dateStr.split('/');
+            return new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+        })()
+        : dateStr.includes('-')
+            ? (() => {
+                const [y, m, d] = dateStr.split('-');
+                return new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+            })()
+            : new Date(dateStr);
+    return isNaN(date.getTime()) ? null : date;
+};
+
+const isPeriodBeforeRetainerStart = (startDate: string, monthName: string, year: string | number) => {
+    const start = parseRetainerStartDate(startDate);
+    const monthIndex = months.indexOf(monthName);
+    const periodYear = Number(year);
+    if (!start || monthIndex === -1 || Number.isNaN(periodYear)) return false;
+
+    const startKey = start.getFullYear() * 12 + start.getMonth();
+    const periodKey = periodYear * 12 + monthIndex;
+    return periodKey < startKey;
+};
+
 const computeActualDueDate = (monthStr: string, yearStr: string, code: string, fiscalYearEnd: string) => {
     const monthIndex = months.indexOf(monthStr);
     if (monthIndex === -1) return { formatted: 'N/A', raw: new Date() };
@@ -155,6 +182,7 @@ const Dashboard: React.FC = () => {
 
             const client = clientById.get(normalizeId(retainer.clientId));
             if (!client || client.status === 'Inactive') return null;
+            if (isPeriodBeforeRetainerStart(retainer.startDate, currentMonth, currentYear)) return null;
             
             const frequency = d.dueDate.startsWith('M') ? 'Monthly' : d.dueDate.startsWith('Q') ? 'Quarterly' : (d.dueDate.startsWith('Y') || d.dueDate.startsWith('A')) ? 'Annual' : 'Monthly';
             const calendarOnlyTaxIDs = ['0007', '0008', '0012', '0013', '0016', '0017', '0018', '0019', '0020', '0021', '0022'].map(id => normalizeId(id));

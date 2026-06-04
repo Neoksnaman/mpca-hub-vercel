@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import { UserRole, Status } from '../types';
 import { fetchAllData, addRetainerLog, updateRetainerLog, deleteRetainerLog, addTask, addActivity, updateTask, updateActivity, deleteActivity, deleteTask, updateSpecial, addNotification, fetchSpecialWorklog } from '../services/googleSheetsService';
-import { months, computeActualDueDate } from '../utils/dateUtils';
+import { months, computeActualDueDate, parseDateStr } from '../utils/dateUtils';
 
 const normalizeId = (id: any) => String(id || '').trim().replace(/^0+/, '') || '0';
 
@@ -35,6 +35,17 @@ const formatDisplayDate = (dateStr: string) => {
     const [m, d, y] = dateStr.split('/');
     const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
     return date.toLocaleDateString('default', { month: 'long', day: 'numeric', year: 'numeric' });
+};
+
+const isPeriodBeforeRetainerStart = (startDate: string, monthName: string, year: string | number) => {
+    const start = parseDateStr(startDate);
+    const monthIndex = months.indexOf(monthName);
+    const periodYear = Number(year);
+    if (!start || monthIndex === -1 || Number.isNaN(periodYear)) return false;
+
+    const startKey = start.getFullYear() * 12 + start.getMonth();
+    const periodKey = periodYear * 12 + monthIndex;
+    return periodKey < startKey;
 };
 
 const specialStatusOrder: Record<string, number> = {
@@ -556,6 +567,7 @@ const Engagements: React.FC = () => {
 
             const client = lookupMaps.clientById.get(normalizeId(retainer.clientId));
             if (!client || client.status === 'Inactive') return null;
+            if (isPeriodBeforeRetainerStart(retainer.startDate, currentMonth, currentYear)) return null;
 
             const compliance = d.taxID ? lookupMaps.taxById.get(normalizeId(d.taxID)) : null;
             const service = !d.taxID ? lookupMaps.serviceById.get(normalizeId(d.serviceID)) : null;
@@ -684,6 +696,7 @@ const Engagements: React.FC = () => {
                 const client = lookupMaps.clientById.get(normalizeId(retainer.clientId));
                 if (!client || client.status === 'Inactive') return null;
                 if (retainerFilter.client !== 'All' && client?.name !== retainerFilter.client) return null;
+                if (isPeriodBeforeRetainerStart(retainer.startDate, currentMonth, retainerFilter.year)) return null;
 
                 // Frequency Check
                 const frequency = d.dueDate.startsWith('M') ? 'Monthly' :
@@ -712,7 +725,7 @@ const Engagements: React.FC = () => {
                 return compliance?.complianceCode || service?.name || d.serviceID;
             }).filter(Boolean)
         )).sort();
-    }, [activeTab, context?.deadlines, lookupMaps, retainerFilter.month, retainerFilter.client, isAssignedVisible, calendarOnlyTaxIDs]);
+    }, [activeTab, context?.deadlines, lookupMaps, retainerFilter.month, retainerFilter.year, retainerFilter.client, isAssignedVisible, calendarOnlyTaxIDs]);
 
     // --- Tab 2: Special Engagements Logic ---
     // Dynamic Filter Options for Specials
