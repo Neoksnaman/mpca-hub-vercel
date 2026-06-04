@@ -277,6 +277,11 @@ export const addRetainerLog = (data: { deadline: string; period: string; dateCom
 export const updateRetainerLog = (data: { deadline: string; period: string; dateCompleted: string; remarks?: string; }) =>
     apiCall<any>('/api/retainer-logs', { method: 'PUT', body: JSON.stringify(data) });
 
+export const deleteRetainerLog = (deadline: string, period: string) => {
+    const params = new URLSearchParams({ deadline, period });
+    return apiCall<any>(`/api/retainer-logs?${params.toString()}`, { method: 'DELETE' });
+};
+
 export const fetchSpecialWorklog = (specialID: string) =>
     apiCall<{ taskLog: any[]; activityLog: any[] }>(`/api/specials/${specialID}/worklog`);
 

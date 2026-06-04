@@ -2096,6 +2096,31 @@ app.put('/api/retainer-logs', async (req, res) => {
   }
 });
 
+app.delete('/api/retainer-logs', async (req, res) => {
+  const deadline = String(req.query.deadline || req.body?.deadline || '').trim();
+  const period = String(req.query.period || req.body?.period || '').trim();
+  console.log('[API] Deleting retainer log:', deadline, period);
+
+  try {
+    if (!deadline || !period) return res.status(400).json({ error: 'deadline and period are required' });
+
+    const db = await getMongoDb();
+    const ids = userIdCandidates(deadline);
+    const result = await db.collection<any>('retainerLogs').deleteOne({
+      deadlineID: { $in: ids },
+      period
+    });
+
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Log entry not found' });
+
+    console.log('[API] Successfully deleted retainer log for deadline:', deadline, period);
+    return res.status(200).json({ success: true });
+  } catch (error: any) {
+    console.error('[API] Error deleting retainer log:', error);
+    return res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
 app.get('/api/specials/:id/worklog', async (req, res) => {
   const { id } = req.params;
 

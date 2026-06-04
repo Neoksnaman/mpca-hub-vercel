@@ -25,7 +25,7 @@ import {
     AlertTriangle
 } from 'lucide-react';
 import { UserRole, Status } from '../types';
-import { fetchAllData, addRetainerLog, updateRetainerLog, addTask, addActivity, updateTask, updateActivity, deleteActivity, deleteTask, updateSpecial, addNotification, fetchSpecialWorklog } from '../services/googleSheetsService';
+import { fetchAllData, addRetainerLog, updateRetainerLog, deleteRetainerLog, addTask, addActivity, updateTask, updateActivity, deleteActivity, deleteTask, updateSpecial, addNotification, fetchSpecialWorklog } from '../services/googleSheetsService';
 import { months, computeActualDueDate } from '../utils/dateUtils';
 
 const normalizeId = (id: any) => String(id || '').trim().replace(/^0+/, '') || '0';
@@ -128,6 +128,8 @@ const Engagements: React.FC = () => {
     const [activityToDelete, setActivityToDelete] = useState<any | null>(null);
     const [showDeleteTaskModal, setShowDeleteTaskModal] = useState(false);
     const [taskToDelete, setTaskToDelete] = useState<any | null>(null);
+    const [showUnfileModal, setShowUnfileModal] = useState(false);
+    const [logToUnfile, setLogToUnfile] = useState<any | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
 
     const canDeleteSpecialWork = useMemo(() => {
@@ -225,6 +227,23 @@ const Engagements: React.FC = () => {
             context?.refreshData();
         } catch (err: any) {
             context?.showToast(err.message || 'Failed to update status', 'error');
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const handleUnfileRetainerLog = async () => {
+        if (!logToUnfile) return;
+        setIsProcessing(true);
+        try {
+            await deleteRetainerLog(logToUnfile.id, logToUnfile.periodKey);
+            context?.showToast('Compliance filing removed successfully', 'success');
+            setShowUnfileModal(false);
+            setLogToUnfile(null);
+            setIsEditingDate(false);
+            await context?.refreshData();
+        } catch (err: any) {
+            context?.showToast(err.message || 'Failed to remove filing', 'error');
         } finally {
             setIsProcessing(false);
         }
@@ -1130,18 +1149,29 @@ const Engagements: React.FC = () => {
                                                     <h3 className="text-sm font-black text-neutral-dark dark:text-white truncate">Compliance Details</h3>
                                                 </div>
                                                 {(currentItem.status === 'Filed' || currentItem.status === 'LATE') && !isEditingDate && (
-                                                    <button
-                                                        onClick={() => {
-                                                            setIsEditingDate(true);
-                                                            if (currentItem.dateFiled) {
-                                                                const [m, d, y] = currentItem.dateFiled.split('/');
-                                                                setCompletionDate(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`);
-                                                            }
-                                                        }}
-                                                        className="px-3 py-1 rounded-lg bg-primary/10 text-primary text-[10px] font-black hover:bg-primary hover:text-white transition-colors"
-                                                    >
-                                                        Edit filing
-                                                    </button>
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            onClick={() => {
+                                                                setLogToUnfile(currentItem);
+                                                                setShowUnfileModal(true);
+                                                            }}
+                                                            className="px-3 py-1 rounded-lg bg-white text-rose-600 border border-rose-200 text-[10px] font-black hover:bg-rose-600 hover:text-white hover:border-rose-600 transition-colors dark:bg-gray-800 dark:text-rose-400 dark:border-rose-500/30"
+                                                        >
+                                                            Unfile
+                                                        </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                setIsEditingDate(true);
+                                                                if (currentItem.dateFiled) {
+                                                                    const [m, d, y] = currentItem.dateFiled.split('/');
+                                                                    setCompletionDate(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`);
+                                                                }
+                                                            }}
+                                                            className="px-3 py-1 rounded-lg bg-primary/10 text-primary text-[10px] font-black hover:bg-primary hover:text-white transition-colors"
+                                                        >
+                                                            Edit filing
+                                                        </button>
+                                                    </div>
                                                 )}
                                             </div>
 
@@ -1814,6 +1844,55 @@ const Engagements: React.FC = () => {
                                         </>
                                     ) : (
                                         'Yes, Delete'
+                                    )}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Unfile Retainer Confirmation Modal */}
+            {showUnfileModal && logToUnfile && (
+                <div className="fixed inset-0 z-[11000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+                    <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 max-w-sm w-full shadow-2xl border border-rose-100 dark:border-rose-900/30 animate-in zoom-in-95 duration-300">
+                        <div className="flex flex-col items-center text-center">
+                            <div className="w-16 h-16 bg-rose-100 dark:bg-rose-900/30 rounded-full flex items-center justify-center text-rose-600 dark:text-rose-400 mb-6">
+                                <AlertTriangle size={32} />
+                            </div>
+
+                            <h3 className="text-xl font-bold text-neutral-dark dark:text-white mb-2">
+                                Unfile Compliance?
+                            </h3>
+                            <p className="text-sm text-secondary dark:text-gray-400 mb-8 leading-relaxed">
+                                This will remove the filed date and remarks for <span className="font-bold text-neutral-dark dark:text-white">"{logToUnfile.engagementName}"</span>.<br />
+                                <span className="text-rose-600 dark:text-rose-400 font-medium">The compliance will return to Pending or Late based on its deadline.</span><br />
+                                This action cannot be undone.
+                            </p>
+
+                            <div className="flex gap-3 w-full">
+                                <button
+                                    onClick={() => {
+                                        setShowUnfileModal(false);
+                                        setLogToUnfile(null);
+                                    }}
+                                    disabled={isProcessing}
+                                    className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold text-secondary hover:bg-neutral-light dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleUnfileRetainerLog}
+                                    disabled={isProcessing}
+                                    className="flex-1 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-rose-600/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                                >
+                                    {isProcessing ? (
+                                        <>
+                                            <Loader2 size={16} className="animate-spin" />
+                                            Unfiling...
+                                        </>
+                                    ) : (
+                                        'Yes, Unfile'
                                     )}
                                 </button>
                             </div>
