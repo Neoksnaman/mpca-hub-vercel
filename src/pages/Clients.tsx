@@ -6,12 +6,43 @@ import UserHoverCard from '../components/UserHoverCard';
 import { Search, User as UserIcon, Building2, ChevronRight, ChevronLeft, ChevronDown, FileText, Briefcase, Plus, X, Loader2, CheckCircle2, AlertCircle, Eye, Calendar, UserPlus, Shield, Edit2, Trash2, Layers, ArrowUpRight, Copy } from 'lucide-react';
 import { UserRole } from '../types';
 import { canViewClient } from '../utils/rbac';
-import { addClient, addRetainer, updateClient, updateRetainer, deleteRetainer, addSpecial, updateSpecial, deleteSpecial, addCredential, updateCredential, deleteCredential, addNotification } from '../services/googleSheetsService';
+import { addClient, addRetainer, updateClient, updateRetainer, deleteRetainer, addSpecial, updateSpecial, deleteSpecial, addCredential, updateCredential, deleteCredential, addNotification, fetchAuditLogs } from '../services/googleSheetsService';
 
 const normalizeId = (id: any) => String(id || '').replace(/^0+(?!$)/, '').trim() || '0';
 const getUserFullName = (user: any) => `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
 const sortUsersByName = (users: any[]) => [...users].sort((a, b) => getUserFullName(a).localeCompare(getUserFullName(b)));
 const isClientActiveRecord = (client: any) => String(client?.status || '').toLowerCase().includes('active') && !String(client?.status || '').toLowerCase().includes('inactive');
+const formatAuditTimestamp = (value: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('default', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+const formatAuditFieldLabel = (key: string) => key
+    .replace(/ID$/, '')
+    .replace(/Id$/, '')
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/^./, (char) => char.toUpperCase())
+    .trim();
+
+const formatAuditDetailValue = (value: any) => {
+    const text = String(value ?? '').trim();
+    return text || 'Blank';
+};
+
+const getChangedAuditDetailRows = (details: any) => {
+    const before = details?.before || {};
+    const after = details?.after || {};
+    const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+        .filter((key) => !['clientID', 'retainerID', 'specialID', 'credentialID'].includes(key));
+    return keys.filter((key) => String(before[key] ?? '') !== String(after[key] ?? '')).map((key) => ({
+        key,
+        label: formatAuditFieldLabel(key),
+        before: before[key],
+        after: after[key]
+    }));
+};
 
 // --- Sub-components to reduce duplication ---
 
@@ -868,7 +899,7 @@ const ClientTable = ({ clients, title, activeTab, onViewDetails, defaultExpanded
                                     <tr
                                         key={client.id || client.name}
                                         onClick={() => onViewDetails?.(client)}
-                                        className="group cursor-pointer transition-all duration-300 hover:bg-primary/[0.02] dark:hover:bg-primary/[0.05] relative hover:z-[60] last:border-0"
+                                        className="group cursor-pointer transition-all duration-300 hover:bg-primary/[0.02] dark:hover:bg-primary/[0.05] relative hover:z-[10] last:border-0"
                                     >
                                         <td className="px-4 py-2.5">
                                             <div className="flex items-center gap-3">
@@ -1283,7 +1314,7 @@ const ClientDrawerSection: React.FC<{
     defaultOpen?: boolean;
     action?: React.ReactNode;
     children: React.ReactNode;
-}> = ({ id, title, count, action, children }) => {
+}> = ({ id, title, action, children }) => {
     return (
         <section id={id} className="scroll-mt-24">
             <div className="space-y-4">
@@ -1291,11 +1322,6 @@ const ClientDrawerSection: React.FC<{
                     <div className="flex items-center gap-2 min-w-0">
                         <div className="w-1 h-4 bg-primary rounded-full" />
                         <h3 className="text-sm font-black text-neutral-dark dark:text-white truncate">{title}</h3>
-                        {typeof count === 'number' && (
-                            <span className="px-1.5 py-0.5 rounded-md bg-primary/10 text-[9px] font-black text-primary border border-primary/10">
-                                {count}
-                            </span>
-                        )}
                     </div>
                     {action}
                 </div>
@@ -1526,14 +1552,154 @@ const Clients: React.FC = () => {
         securityAnswer: '',
         remarks: ''
     });
+    const [credentialPage, setCredentialPage] = useState(1);
+    const [clientAuditLogs, setClientAuditLogs] = useState<any[]>([]);
+    const [isClientAuditLoading, setIsClientAuditLoading] = useState(false);
+    const [clientAuditPage, setClientAuditPage] = useState(1);
+    const [clientAuditTotalPages, setClientAuditTotalPages] = useState(1);
+    const [expandedClientAuditLogId, setExpandedClientAuditLogId] = useState<string | null>(null);
+    const [visibleAuditPasswordCells, setVisibleAuditPasswordCells] = useState<Set<string>>(new Set());
+
+    const serviceById = useMemo(() => {
+        const map = new Map<string, any>();
+        (context?.services || []).forEach((service: any) => map.set(normalizeId(service.id || service.serviceID), service));
+        return map;
+    }, [context?.services]);
+
+    const taxById = useMemo(() => {
+        const map = new Map<string, any>();
+        (context?.taxCompliances || []).forEach((tax: any) => map.set(normalizeId(tax.taxID || tax.id), tax));
+        return map;
+    }, [context?.taxCompliances]);
+
+    const userById = useMemo(() => {
+        const map = new Map<string, any>();
+        allUsers.forEach((user: any) => map.set(normalizeId(user.id || user.userID), user));
+        return map;
+    }, [allUsers]);
+
+    const formatClientAuditDetailValue = (key: string, value: any, cellKey = '') => {
+        const text = formatAuditDetailValue(value);
+        if (text === 'Blank') return text;
+        if (key === 'deadlineConfig') {
+            return text.split(' | ').map((entry) => {
+                const [serviceId, taxId, dueDate] = entry.split(':');
+                const service = serviceById.get(normalizeId(serviceId));
+                const tax = taxById.get(normalizeId(taxId));
+                const label = tax?.complianceName || tax?.complianceCode || service?.name || service?.serviceName || serviceId;
+                return dueDate ? `${label} - ${dueDate}` : label;
+            }).join('; ');
+        }
+        if (key === 'assignedStaffID' || key === 'assignedStaffId' || key === 'userID' || key === 'userId') {
+            const staff = userById.get(normalizeId(value));
+            return staff ? getUserFullName(staff) || text : text;
+        }
+        if (key === 'serviceID' || key === 'serviceId') {
+            const service = serviceById.get(normalizeId(value));
+            return service?.name || service?.serviceName || text;
+        }
+        if (key === 'password') {
+            const isVisible = visibleAuditPasswordCells.has(cellKey);
+            return (
+                <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="truncate font-mono">{isVisible ? text : '••••••••'}</span>
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            setVisibleAuditPasswordCells(prev => {
+                                const next = new Set(prev);
+                                if (next.has(cellKey)) next.delete(cellKey);
+                                else next.add(cellKey);
+                                return next;
+                            });
+                        }}
+                        className="shrink-0 text-secondary hover:text-primary transition-colors"
+                        title={isVisible ? 'Hide password' : 'Show password'}
+                    >
+                        <Eye size={11} />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            navigator.clipboard.writeText(text);
+                        }}
+                        className="shrink-0 text-secondary hover:text-primary transition-colors"
+                        title="Copy password"
+                    >
+                        <Copy size={11} />
+                    </button>
+                </div>
+            );
+        }
+        return text;
+    };
+
+    const loadClientAuditLogs = async (client = selectedClient, page = 1) => {
+        if (!client?.id) {
+            setClientAuditLogs([]);
+            setClientAuditPage(1);
+            setClientAuditTotalPages(1);
+            return;
+        }
+
+        setIsClientAuditLoading(true);
+        try {
+            const result = await fetchAuditLogs({
+                entityType: 'client',
+                entityId: client.id,
+                limit: 5,
+                page
+            });
+            setClientAuditLogs(result.logs || []);
+            setClientAuditPage(result.page || page);
+            setClientAuditTotalPages(result.totalPages || 1);
+            setExpandedClientAuditLogId(null);
+            setVisibleAuditPasswordCells(new Set());
+        } catch (error) {
+            setClientAuditLogs([]);
+            setClientAuditPage(1);
+            setClientAuditTotalPages(1);
+            setExpandedClientAuditLogId(null);
+            setVisibleAuditPasswordCells(new Set());
+        } finally {
+            setIsClientAuditLoading(false);
+        }
+    };
+
+    const clientCredentials = useMemo(() => {
+        if (!selectedClient?.id) return [];
+        return (context?.credentials || []).filter(c => normalizeId(c.clientID) === normalizeId(selectedClient.id));
+    }, [context?.credentials, selectedClient?.id]);
+
+    const credentialPageSize = 5;
+    const credentialTotalPages = Math.max(Math.ceil(clientCredentials.length / credentialPageSize), 1);
+    const paginatedClientCredentials = clientCredentials.slice(
+        (credentialPage - 1) * credentialPageSize,
+        credentialPage * credentialPageSize
+    );
 
     useEffect(() => {
         if (!isDetailModalOpen) {
             resetAssignmentForm();
             resetSpecialForm();
             setIsEditing(false);
+            setClientAuditLogs([]);
+            setClientAuditPage(1);
+            setClientAuditTotalPages(1);
+            setExpandedClientAuditLogId(null);
+            setVisibleAuditPasswordCells(new Set());
+            setCredentialPage(1);
+        } else if (selectedClient?.id) {
+            loadClientAuditLogs(selectedClient, 1);
+            setCredentialPage(1);
         }
-    }, [isDetailModalOpen]);
+    }, [isDetailModalOpen, selectedClient?.id]);
+
+    useEffect(() => {
+        setCredentialPage(page => Math.min(page, credentialTotalPages));
+    }, [credentialTotalPages]);
 
     const handleEditRetainer = (r: any) => {
         const normalizeId = (id: any) => String(id || '').trim().replace(/^0+/, '') || '0';
@@ -1610,6 +1776,7 @@ const Clients: React.FC = () => {
             }
             setItemToDelete(null);
             if (context?.refreshData) await context.refreshData();
+            await loadClientAuditLogs(selectedClient, 1);
         } catch (error: any) {
             context?.showToast(`Failed to delete ${itemToDelete.type.toLowerCase()}: ` + error.message, 'error');
         } finally {
@@ -1870,11 +2037,15 @@ const Clients: React.FC = () => {
         try {
             await addClient(formData);
             
-            // Notify Admins
-            const admins = context?.allUsers.filter(u => u.role === 'Admin') || [];
-            for (const admin of admins) {
+            // Notify leadership
+            const leadershipUsers = context?.allUsers.filter(u =>
+                String(u.status || '').trim().toLowerCase() === 'active' &&
+                (u.role === 'Admin' || u.role === 'Manager' || u.role === 'Supervisor')
+            ) || [];
+            for (const leadershipUser of leadershipUsers) {
+                if (String(leadershipUser.status || '').trim().toLowerCase() !== 'active') continue;
                 await addNotification({
-                    userId: admin.id,
+                    userId: leadershipUser.id,
                     title: 'New Client Onboarded',
                     message: `Client ${formData.name} has been successfully onboarded and is Active.`,
                     type: 'Client',
@@ -1974,6 +2145,7 @@ const Clients: React.FC = () => {
             setEditingRetainerId(null);
             setShowAssignmentForm(false);
             if (context?.refreshData) await context.refreshData();
+            await loadClientAuditLogs(selectedClient, 1);
         } catch (error: any) {
             context?.showToast(`Failed to ${editingRetainerId ? 'update' : 'assign'} service: ` + error.message, 'error');
         } finally {
@@ -1987,12 +2159,18 @@ const Clients: React.FC = () => {
 
         setIsSubmitting(true);
         try {
-            await updateClient(selectedClient.id, editFormData);
+            const result = await updateClient(selectedClient.id, editFormData);
+            if (result?.unchanged) {
+                context?.showToast('No changes to save.', 'info');
+                setIsEditing(false);
+                return;
+            }
             context?.showToast('Client updated successfully!', 'success');
             setIsEditing(false);
             // Update selected client locally so UI reflects change immediately
             setSelectedClient({ ...selectedClient, ...editFormData });
             if (context?.refreshData) await context.refreshData();
+            await loadClientAuditLogs(selectedClient, 1);
         } catch (error: any) {
             context?.showToast('Failed to update client: ' + error.message, 'error');
         } finally {
@@ -2013,7 +2191,7 @@ const Clients: React.FC = () => {
                 const oldStaffName = oldSpecial?.assignedStaff;
                 const oldStaffUser = allUsers.find(u => u.firstName === oldStaffName || `${u.firstName} ${u.lastName}` === oldStaffName);
                 
-                await updateSpecial(editingSpecialId, {
+                const result = await updateSpecial(editingSpecialId, {
                     assignedStaffId: task.assignedStaffId,
                     serviceId: task.serviceId,
                     projectTitle: task.projectTitle,
@@ -2022,6 +2200,11 @@ const Clients: React.FC = () => {
                     status: task.status,
                     description: task.description
                 });
+                if (result?.unchanged) {
+                    context?.showToast('No changes to save.', 'info');
+                    resetSpecialForm();
+                    return;
+                }
                 
                 // Notify the new staff if assignment changed
                 if (oldStaffUser?.id !== task.assignedStaffId && task.assignedStaffId && task.assignedStaffId !== user?.id) {
@@ -2060,6 +2243,7 @@ const Clients: React.FC = () => {
 
             resetSpecialForm();
             if (context?.refreshData) await context.refreshData();
+            await loadClientAuditLogs(selectedClient, 1);
         } catch (err: any) {
             context?.showToast(err.message, 'error');
         } finally {
@@ -2141,6 +2325,7 @@ const Clients: React.FC = () => {
             setShowCredentialForm(false);
             setCredentialFormData({ systemName: '', username: '', password: '', securityAnswer: '', remarks: '' });
             if (context?.refreshData) await context.refreshData();
+            await loadClientAuditLogs(selectedClient, 1);
         } catch (error: any) {
             context?.showToast('Failed to add credential: ' + error.message, 'error');
         } finally {
@@ -2157,6 +2342,7 @@ const Clients: React.FC = () => {
             context?.showToast('Credential updated successfully!', 'success');
             setEditingCredentialId(null);
             if (context?.refreshData) await context.refreshData();
+            await loadClientAuditLogs(selectedClient, 1);
         } catch (error: any) {
             context?.showToast('Failed to update credential: ' + error.message, 'error');
         } finally {
@@ -2752,7 +2938,8 @@ const Clients: React.FC = () => {
                                         { id: 'client-retainers', label: 'Retainers' },
                                         { id: 'client-specials', label: 'Special Projects' }
                                     ] : []),
-                                    { id: 'client-credentials', label: 'Credentials' }
+                                    { id: 'client-credentials', label: 'Credentials' },
+                                    { id: 'client-audit-logs', label: 'Audit Logs' }
                                 ].map(item => (
                                     <button
                                         key={item.id}
@@ -3327,7 +3514,7 @@ const Clients: React.FC = () => {
                                 )}
 
                                 <div className="space-y-3">
-                                    {(context?.credentials || []).filter(c => normalizeId(c.clientID) === normalizeId(selectedClient.id)).length > 0 && (
+                                    {clientCredentials.length > 0 && (
                                         <div className="bg-white/85 dark:bg-gray-800/70 rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
                                             <div className="hidden sm:grid grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_auto] gap-4 px-4 py-2.5 bg-neutral-light/50 dark:bg-gray-900/40 border-b border-neutral-medium/50 dark:border-gray-700">
                                                 <span className="text-[9px] font-black text-secondary dark:text-gray-400">System</span>
@@ -3336,8 +3523,7 @@ const Clients: React.FC = () => {
                                                 <span className="text-[9px] font-black text-secondary dark:text-gray-400 text-right">Actions</span>
                                             </div>
                                             <div className="divide-y divide-neutral-medium/40 dark:divide-gray-700">
-                                                {(context?.credentials || [])
-                                                    .filter(c => normalizeId(c.clientID) === normalizeId(selectedClient.id))
+                                                {paginatedClientCredentials
                                                     .map((c) => (
                                                         editingCredentialId === c.credentialID ? (
                                                             <div key={c.credentialID} className="p-4">
@@ -3363,12 +3549,125 @@ const Clients: React.FC = () => {
                                                     ))
                                                 }
                                             </div>
+                                            {credentialTotalPages > 1 && (
+                                                <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-neutral-medium/40 dark:border-gray-700/60 bg-neutral-light/30 dark:bg-gray-900/30">
+                                                    <button
+                                                        onClick={() => setCredentialPage(page => Math.max(page - 1, 1))}
+                                                        disabled={credentialPage <= 1}
+                                                        className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                                    >
+                                                        Previous
+                                                    </button>
+                                                    <span className="text-[10px] font-black text-secondary dark:text-gray-400">Page {credentialPage} of {credentialTotalPages}</span>
+                                                    <button
+                                                        onClick={() => setCredentialPage(page => Math.min(page + 1, credentialTotalPages))}
+                                                        disabled={credentialPage >= credentialTotalPages}
+                                                        className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                                    >
+                                                        Next
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
-                                    {(context?.credentials || []).filter(c => normalizeId(c.clientID) === normalizeId(selectedClient.id)).length === 0 && !showCredentialForm && (
+                                    {clientCredentials.length === 0 && !showCredentialForm && (
                                         <div className="py-8 text-center border border-dashed border-neutral-medium dark:border-gray-700 rounded-[2rem] bg-white/40 dark:bg-gray-900/40">
                                             <Shield className="mx-auto mb-2 text-neutral-medium dark:text-gray-700 opacity-20" size={20} />
                                             <p className="text-[9px] text-secondary font-black uppercase tracking-widest opacity-30">No credentials stored</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </ClientDrawerSection>
+
+                            <ClientDrawerSection
+                                id="client-audit-logs"
+                                title="Audit Logs"
+                                count={clientAuditLogs.length}
+                                defaultOpen={false}
+                            >
+                                <div className="bg-white/85 dark:bg-gray-800/70 rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
+                                    <div className={`${clientAuditLogs.length > 0 || isClientAuditLoading ? 'min-h-[255px]' : ''} transition-opacity duration-200 ${isClientAuditLoading && clientAuditLogs.length > 0 ? 'opacity-70' : 'opacity-100'}`}>
+                                        {clientAuditLogs.length > 0 ? (
+                                            clientAuditLogs.map((log) => {
+                                                const isExpanded = expandedClientAuditLogId === log.id;
+                                                const detailRows = getChangedAuditDetailRows(log.details);
+                                                const hasDetails = detailRows.length > 0;
+                                                return (
+                                                    <div key={log.id} className="border-b border-neutral-medium/40 dark:border-gray-700/60 last:border-0 hover:bg-neutral-light/50 dark:hover:bg-gray-800 transition-colors">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => hasDetails && setExpandedClientAuditLogId(isExpanded ? null : log.id)}
+                                                            className="w-full px-5 py-3 text-left"
+                                                        >
+                                                            <div className="flex items-start justify-between gap-4">
+                                                                <div className="min-w-0">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <p className="text-xs font-black text-neutral-dark dark:text-white">{log.actionLabel || log.action}</p>
+                                                                        {hasDetails && (
+                                                                            <ChevronDown size={13} className={`text-secondary/50 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                                                        )}
+                                                                    </div>
+                                                                    <p className="mt-1 text-[11px] font-bold text-secondary dark:text-gray-400">
+                                                                        {log.userName || 'System'}{log.userRole ? ` - ${log.userRole}` : ''}
+                                                                    </p>
+                                                                </div>
+                                                                <p className="shrink-0 text-[10px] font-bold text-secondary/70 dark:text-gray-400">{formatAuditTimestamp(log.createdAt)}</p>
+                                                            </div>
+                                                            {log.summary && (
+                                                                <p className="mt-2 text-[11px] font-medium text-secondary dark:text-gray-400">{log.summary}</p>
+                                                            )}
+                                                        </button>
+                                                        {isExpanded && (
+                                                            <div className="mx-5 mb-3 rounded-xl border border-neutral-medium/50 dark:border-gray-700/70 bg-neutral-light/40 dark:bg-gray-900/40 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                                <div className="grid grid-cols-[1fr_1fr_1fr] border-b border-neutral-medium/40 dark:border-gray-700/60 bg-white/50 dark:bg-gray-800/50">
+                                                                    <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Field</div>
+                                                                    <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Before</div>
+                                                                    <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">After</div>
+                                                                </div>
+                                                                {detailRows.map((row) => (
+                                                                    <div key={row.label} className="grid grid-cols-[1fr_1fr_1fr] items-start border-b border-neutral-medium/30 dark:border-gray-700/50 last:border-0">
+                                                                        <div className="px-3 py-2 text-[10px] font-black text-neutral-dark dark:text-white">{row.label}</div>
+                                                                        <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                            <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatClientAuditDetailValue(row.key, row.before, `${log.id}-${row.key}-before`)}</div>
+                                                                        </div>
+                                                                        <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                            <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatClientAuditDetailValue(row.key, row.after, `${log.id}-${row.key}-after`)}</div>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })
+                                        ) : isClientAuditLoading ? (
+                                            <div className="h-[255px] flex flex-col items-center justify-center gap-2 text-xs font-bold text-secondary/60">
+                                                <Loader2 size={16} className="animate-spin text-primary/70" />
+                                                Loading audit logs...
+                                            </div>
+                                        ) : (
+                                            <div className="m-4 py-8 text-center border border-dashed border-neutral-medium dark:border-gray-700 rounded-[2rem] bg-white/40 dark:bg-gray-900/40">
+                                                <p className="text-[9px] text-secondary font-black uppercase tracking-widest opacity-30">No audit logs recorded</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                    {clientAuditTotalPages > 1 && (
+                                        <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-neutral-medium/40 dark:border-gray-700/60 bg-neutral-light/30 dark:bg-gray-900/30">
+                                            <button
+                                                onClick={() => loadClientAuditLogs(selectedClient, Math.max(clientAuditPage - 1, 1))}
+                                                disabled={isClientAuditLoading || clientAuditPage <= 1}
+                                                className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                Previous
+                                            </button>
+                                            <span className="text-[10px] font-black text-secondary dark:text-gray-400">Page {clientAuditPage} of {clientAuditTotalPages}</span>
+                                            <button
+                                                onClick={() => loadClientAuditLogs(selectedClient, Math.min(clientAuditPage + 1, clientAuditTotalPages))}
+                                                disabled={isClientAuditLoading || clientAuditPage >= clientAuditTotalPages}
+                                                className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                Next
+                                            </button>
                                         </div>
                                     )}
                                 </div>

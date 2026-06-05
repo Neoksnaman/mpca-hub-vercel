@@ -20,7 +20,7 @@ import {
     Printer,
     Pencil
 } from 'lucide-react';
-import { addTransmittal, addMeeting, uploadFile, updateTransmittal, updateMeeting, normalizeId, deleteFile, deleteTransmittal, deleteMeeting, addNotification } from '../services/googleSheetsService';
+import { addTransmittal, addMeeting, uploadFile, updateTransmittal, updateMeeting, normalizeId, deleteFile, deleteTransmittal, deleteMeeting, addNotification, fetchAuditLogs } from '../services/googleSheetsService';
 import { useReactToPrint } from 'react-to-print';
 import { TransmittalPrintTemplate } from '../components/TransmittalPrintTemplate';
 
@@ -33,6 +33,49 @@ const getDriveUrl = (idOrUrl: string) => {
 
 const getUserFullName = (user: any) => `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
 const sortUsersByName = (users: any[]) => [...users].sort((a, b) => getUserFullName(a).localeCompare(getUserFullName(b)));
+
+const formatAuditTimestamp = (value: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('default', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+const formatAuditFieldLabel = (key: string) => {
+    const labels: Record<string, string> = {
+        clientID: 'Client',
+        userID: 'Representative',
+        userIDs: 'Attendees',
+        itemCount: 'Document Count',
+        receiptUrl: 'Official Slip',
+        momUrl: 'Minutes Attachment',
+        receiverName: 'Receiver Name',
+        receiverAddress: 'Receiver Address',
+        attendeeCount: 'Attendee Count'
+    };
+    return labels[key] || key
+        .replace(/ID$/, '')
+        .replace(/Id$/, '')
+        .replace(/([A-Z])/g, ' $1')
+        .replace(/^./, char => char.toUpperCase())
+        .trim();
+};
+
+const getOperationAuditDetailRows = (details: any) => {
+    const before = details?.before || {};
+    const after = details?.after || {};
+    const hiddenKeys = new Set(['transmittalID', 'meetingID']);
+    const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+        .filter(key => !hiddenKeys.has(key))
+        .filter(key => String(before[key] ?? '') !== String(after[key] ?? ''));
+
+    return keys.map(key => ({
+        key,
+        label: formatAuditFieldLabel(key),
+        before: before[key],
+        after: after[key]
+    }));
+};
 
 const getDateSortValue = (dateStr: string) => {
     if (!dateStr) return 0;
@@ -436,11 +479,17 @@ const Operations: React.FC = () => {
 
         setIsSubmitting(true);
         try {
-            await updateMeeting(selectedMeeting.meetingID, {
+            const result = await updateMeeting(selectedMeeting.meetingID, {
                 ...meetingData,
                 date: formatDateForSheet(meetingData.date),
                 userIDs: meetingData.userIDs.join(',')
             });
+
+            if (result?.unchanged) {
+                context?.showToast?.('No changes to save.', 'info');
+                setIsEditingMeeting(false);
+                return;
+            }
 
             context?.showToast?.('Meeting updated!', 'success');
             // Update the selected item state so the drawer reflects changes immediately
@@ -465,11 +514,17 @@ const Operations: React.FC = () => {
 
         setIsSubmitting(true);
         try {
-            await updateTransmittal(selectedTransmittal.transmittalID, {
+            const result = await updateTransmittal(selectedTransmittal.transmittalID, {
                 ...transmittalData,
                 date: formatDateForSheet(transmittalData.date),
                 items: transmittalData.items.join('||')
             });
+
+            if (result?.unchanged) {
+                context?.showToast?.('No changes to save.', 'info');
+                setIsEditingTransmittal(false);
+                return;
+            }
 
             context?.showToast?.('Transmittal updated!', 'success');
             // Update the selected item state so the drawer reflects changes immediately
@@ -1081,7 +1136,14 @@ const TransmittalSection = ({
     const [isUploadingLocal, setIsUploadingLocal] = useState(false);
     const [selectedFileInDrawer, setSelectedFileInDrawer] = useState<File | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
+    const [manifestPage, setManifestPage] = useState(1);
+    const [transmittalAuditLogs, setTransmittalAuditLogs] = useState<any[]>([]);
+    const [isTransmittalAuditLoading, setIsTransmittalAuditLoading] = useState(false);
+    const [transmittalAuditPage, setTransmittalAuditPage] = useState(1);
+    const [transmittalAuditTotalPages, setTransmittalAuditTotalPages] = useState(1);
+    const [expandedTransmittalAuditLogId, setExpandedTransmittalAuditLogId] = useState<string | null>(null);
     const itemsPerPage = 25;
+    const manifestItemsPerPage = 10;
     const clientById = useMemo(() => new Map(clients.map((c: any) => [normalizeId(c.id), c])), [clients]);
     const staffById = useMemo(() => new Map(staff.map((u: any) => [normalizeId(u.id), u])), [staff]);
     const filteredHistory = useMemo(() => {
@@ -1101,10 +1163,76 @@ const TransmittalSection = ({
     const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
     const startIndex = (currentPage - 1) * itemsPerPage;
     const paginatedHistory = filteredHistory.slice(startIndex, startIndex + itemsPerPage);
+    const manifestItems = useMemo(() => selectedItem?.items ? selectedItem.items.split('||').filter(Boolean) : [], [selectedItem?.items]);
+    const manifestTotalPages = Math.max(Math.ceil(manifestItems.length / manifestItemsPerPage), 1);
+    const manifestStartIndex = (manifestPage - 1) * manifestItemsPerPage;
+    const paginatedManifestItems = manifestItems.slice(manifestStartIndex, manifestStartIndex + manifestItemsPerPage);
 
     useEffect(() => {
         setCurrentPage(1);
     }, [filteredHistory.length, searchQuery]);
+
+    useEffect(() => {
+        setManifestPage(1);
+    }, [selectedItem?.transmittalID, selectedItem?.items]);
+
+    useEffect(() => {
+        setManifestPage(page => Math.min(page, manifestTotalPages));
+    }, [manifestTotalPages]);
+
+    const loadTransmittalAuditLogs = async (item = selectedItem, page = 1) => {
+        if (!item?.transmittalID) {
+            setTransmittalAuditLogs([]);
+            setTransmittalAuditPage(1);
+            setTransmittalAuditTotalPages(1);
+            return;
+        }
+
+        setIsTransmittalAuditLoading(true);
+        try {
+            const result = await fetchAuditLogs({
+                entityType: 'transmittal',
+                entityId: item.transmittalID,
+                limit: 5,
+                page
+            });
+            setTransmittalAuditLogs(result.logs || []);
+            setTransmittalAuditPage(result.page || page);
+            setTransmittalAuditTotalPages(result.totalPages || 1);
+        } catch (error) {
+            setTransmittalAuditLogs([]);
+            setTransmittalAuditPage(1);
+            setTransmittalAuditTotalPages(1);
+        } finally {
+            setIsTransmittalAuditLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (selectedItem?.transmittalID) {
+            loadTransmittalAuditLogs(selectedItem, 1);
+        } else {
+            setTransmittalAuditLogs([]);
+            setTransmittalAuditPage(1);
+            setTransmittalAuditTotalPages(1);
+        }
+        setExpandedTransmittalAuditLogId(null);
+    }, [selectedItem]);
+
+    const formatTransmittalAuditValue = (key: string, value: any) => {
+        const text = String(value ?? '').trim();
+        if (!text) return 'Blank';
+        if (key === 'clientID') {
+            const client = clientById.get(normalizeId(text)) as any;
+            return client?.name || text;
+        }
+        if (key === 'userID') {
+            const user = staffById.get(normalizeId(text)) as any;
+            return user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : text;
+        }
+        if (key === 'receiptUrl') return text ? 'Attached slip' : 'No slip';
+        return text;
+    };
 
     const printRef = useRef<HTMLDivElement>(null);
 
@@ -1549,10 +1677,10 @@ const TransmittalSection = ({
                                 </div>
                                 <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
                                     <div className="divide-y divide-neutral-medium/30 dark:divide-gray-700/50">
-                                        {selectedItem.items?.split('||').map((item: string, idx: number) => (
-                                            <div key={idx} className="px-5 py-3.5 flex items-start gap-3 hover:bg-primary/[0.02] transition-colors">
+                                        {paginatedManifestItems.map((item: string, idx: number) => (
+                                            <div key={`${manifestStartIndex + idx}-${item}`} className="px-5 py-3.5 flex items-start gap-3 hover:bg-primary/[0.02] transition-colors">
                                                 <span className="mt-0.5 flex items-center justify-center w-7 h-7 rounded-xl bg-primary/10 border border-primary/15 text-[10px] font-black text-primary shrink-0">
-                                                    {String(idx + 1).padStart(2, '0')}
+                                                    {String(manifestStartIndex + idx + 1).padStart(2, '0')}
                                                 </span>
                                                 <p className="text-[13px] font-bold text-neutral-dark dark:text-white leading-relaxed">
                                                     {item.toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase())}
@@ -1560,6 +1688,118 @@ const TransmittalSection = ({
                                             </div>
                                         ))}
                                     </div>
+                                    {manifestTotalPages > 1 && (
+                                        <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-neutral-medium/40 dark:border-gray-700/60 bg-neutral-light/30 dark:bg-gray-900/30">
+                                            <button
+                                                onClick={() => setManifestPage(page => Math.max(page - 1, 1))}
+                                                disabled={manifestPage <= 1}
+                                                className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                Previous
+                                            </button>
+                                            <span className="text-[10px] font-black text-secondary dark:text-gray-400">Page {manifestPage} of {manifestTotalPages}</span>
+                                            <button
+                                                onClick={() => setManifestPage(page => Math.min(page + 1, manifestTotalPages))}
+                                                disabled={manifestPage >= manifestTotalPages}
+                                                className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                Next
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-1 h-4 bg-primary rounded-full" />
+                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white">Audit Logs</h3>
+                                </div>
+                                <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
+                                    <div className={`${transmittalAuditLogs.length > 0 || isTransmittalAuditLoading ? 'min-h-[255px]' : ''} transition-opacity duration-200 ${isTransmittalAuditLoading && transmittalAuditLogs.length > 0 ? 'opacity-70' : 'opacity-100'}`}>
+                                        {transmittalAuditLogs.length > 0 ? (
+                                            transmittalAuditLogs.map((log) => {
+                                                const detailRows = getOperationAuditDetailRows(log.details);
+                                                const isExpanded = expandedTransmittalAuditLogId === log.id;
+                                                const hasDetails = detailRows.length > 0;
+                                                return (
+                                                    <div key={log.id} className="border-b border-neutral-medium/40 dark:border-gray-700/60 last:border-0 hover:bg-neutral-light/50 dark:hover:bg-gray-800 transition-colors">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => hasDetails && setExpandedTransmittalAuditLogId(isExpanded ? null : log.id)}
+                                                            className="w-full px-5 py-3 text-left"
+                                                        >
+                                                            <div className="flex items-start justify-between gap-4">
+                                                                <div className="min-w-0">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <p className="text-xs font-black text-neutral-dark dark:text-white">{log.actionLabel || log.action}</p>
+                                                                        {hasDetails && (
+                                                                            <ChevronDown size={13} className={`text-secondary/50 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                                                        )}
+                                                                    </div>
+                                                                    <p className="mt-1 text-[11px] font-bold text-secondary dark:text-gray-400">
+                                                                        {log.userName || 'System'}{log.userRole ? ` - ${log.userRole}` : ''}
+                                                                    </p>
+                                                                </div>
+                                                                <p className="shrink-0 text-[10px] font-bold text-secondary/70 dark:text-gray-400">{formatAuditTimestamp(log.createdAt)}</p>
+                                                            </div>
+                                                            {log.summary && (
+                                                                <p className="mt-2 text-[11px] font-medium text-secondary dark:text-gray-400">{log.summary}</p>
+                                                            )}
+                                                        </button>
+                                                        {isExpanded && hasDetails && (
+                                                            <div className="mx-5 mb-3 rounded-xl border border-neutral-medium/50 dark:border-gray-700/70 bg-neutral-light/40 dark:bg-gray-900/40 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                                <div className="grid grid-cols-[1fr_1fr_1fr] border-b border-neutral-medium/40 dark:border-gray-700/60 bg-white/50 dark:bg-gray-800/50">
+                                                                    <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Field</div>
+                                                                    <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Before</div>
+                                                                    <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">After</div>
+                                                                </div>
+                                                                {detailRows.map((row) => (
+                                                                    <div key={row.key} className="grid grid-cols-[1fr_1fr_1fr] items-start border-b border-neutral-medium/30 dark:border-gray-700/50 last:border-0">
+                                                                        <div className="px-3 py-2 text-[10px] font-black text-neutral-dark dark:text-white">{row.label}</div>
+                                                                        <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                            <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatTransmittalAuditValue(row.key, row.before)}</div>
+                                                                        </div>
+                                                                        <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                            <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatTransmittalAuditValue(row.key, row.after)}</div>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })
+                                        ) : isTransmittalAuditLoading ? (
+                                            <div className="h-[255px] flex flex-col items-center justify-center gap-2 text-xs font-bold text-secondary/60">
+                                                <Loader2 size={16} className="animate-spin text-primary/70" />
+                                                Loading audit logs...
+                                            </div>
+                                        ) : (
+                                            <div className="m-4 py-8 text-center border border-dashed border-neutral-medium dark:border-gray-700 rounded-[2rem] bg-white/40 dark:bg-gray-900/40">
+                                                <p className="text-[9px] text-secondary font-black uppercase tracking-widest opacity-30">No audit logs recorded</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                    {transmittalAuditTotalPages > 1 && (
+                                        <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-neutral-medium/40 dark:border-gray-700/60 bg-neutral-light/30 dark:bg-gray-900/30">
+                                            <button
+                                                onClick={() => loadTransmittalAuditLogs(selectedItem, Math.max(transmittalAuditPage - 1, 1))}
+                                                disabled={isTransmittalAuditLoading || transmittalAuditPage <= 1}
+                                                className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                Previous
+                                            </button>
+                                            <span className="text-[10px] font-black text-secondary dark:text-gray-400">Page {transmittalAuditPage} of {transmittalAuditTotalPages}</span>
+                                            <button
+                                                onClick={() => loadTransmittalAuditLogs(selectedItem, Math.min(transmittalAuditPage + 1, transmittalAuditTotalPages))}
+                                                disabled={isTransmittalAuditLoading || transmittalAuditPage >= transmittalAuditTotalPages}
+                                                className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                Next
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </>
@@ -1583,6 +1823,11 @@ const MeetingSection = ({
     const [isUploadingLocal, setIsUploadingLocal] = useState(false);
     const [selectedFileInDrawer, setSelectedFileInDrawer] = useState<File | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
+    const [meetingAuditLogs, setMeetingAuditLogs] = useState<any[]>([]);
+    const [isMeetingAuditLoading, setIsMeetingAuditLoading] = useState(false);
+    const [meetingAuditPage, setMeetingAuditPage] = useState(1);
+    const [meetingAuditTotalPages, setMeetingAuditTotalPages] = useState(1);
+    const [expandedMeetingAuditLogId, setExpandedMeetingAuditLogId] = useState<string | null>(null);
     const itemsPerPage = 25;
     const staffById = useMemo(() => new Map(staff.map((u: any) => [normalizeId(u.id), u])), [staff]);
     const filteredHistory = useMemo(() => {
@@ -1613,6 +1858,62 @@ const MeetingSection = ({
     useEffect(() => {
         setCurrentPage(1);
     }, [filteredHistory.length, searchQuery]);
+
+    const loadMeetingAuditLogs = async (item = selectedItem, page = 1) => {
+        if (!item?.meetingID) {
+            setMeetingAuditLogs([]);
+            setMeetingAuditPage(1);
+            setMeetingAuditTotalPages(1);
+            return;
+        }
+
+        setIsMeetingAuditLoading(true);
+        try {
+            const result = await fetchAuditLogs({
+                entityType: 'meeting',
+                entityId: item.meetingID,
+                limit: 5,
+                page
+            });
+            setMeetingAuditLogs(result.logs || []);
+            setMeetingAuditPage(result.page || page);
+            setMeetingAuditTotalPages(result.totalPages || 1);
+        } catch (error) {
+            setMeetingAuditLogs([]);
+            setMeetingAuditPage(1);
+            setMeetingAuditTotalPages(1);
+        } finally {
+            setIsMeetingAuditLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (selectedItem?.meetingID) {
+            loadMeetingAuditLogs(selectedItem, 1);
+        } else {
+            setMeetingAuditLogs([]);
+            setMeetingAuditPage(1);
+            setMeetingAuditTotalPages(1);
+        }
+        setExpandedMeetingAuditLogId(null);
+    }, [selectedItem]);
+
+    const formatMeetingAuditValue = (key: string, value: any) => {
+        const text = String(value ?? '').trim();
+        if (!text) return 'Blank';
+        if (key === 'userIDs') {
+            return text
+                .split(',')
+                .map((id: string) => {
+                    const user = staffById.get(normalizeId(id));
+                    return user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : id;
+                })
+                .filter(Boolean)
+                .join(', ') || 'Blank';
+        }
+        if (key === 'momUrl') return text ? 'Attached minutes' : 'No attachment';
+        return text;
+    };
 
     const allowedStaffForForm = useMemo(() => {
         const role = context?.user?.role;
@@ -2004,6 +2305,99 @@ const MeetingSection = ({
                                             );
                                         })}
                                     </div>
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-1 h-4 bg-primary rounded-full" />
+                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white">Audit Logs</h3>
+                                </div>
+                                <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
+                                    <div className={`${meetingAuditLogs.length > 0 || isMeetingAuditLoading ? 'min-h-[255px]' : ''} transition-opacity duration-200 ${isMeetingAuditLoading && meetingAuditLogs.length > 0 ? 'opacity-70' : 'opacity-100'}`}>
+                                        {meetingAuditLogs.length > 0 ? (
+                                            meetingAuditLogs.map((log) => {
+                                                const detailRows = getOperationAuditDetailRows(log.details);
+                                                const isExpanded = expandedMeetingAuditLogId === log.id;
+                                                const hasDetails = detailRows.length > 0;
+                                                return (
+                                                    <div key={log.id} className="border-b border-neutral-medium/40 dark:border-gray-700/60 last:border-0 hover:bg-neutral-light/50 dark:hover:bg-gray-800 transition-colors">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => hasDetails && setExpandedMeetingAuditLogId(isExpanded ? null : log.id)}
+                                                            className="w-full px-5 py-3 text-left"
+                                                        >
+                                                            <div className="flex items-start justify-between gap-4">
+                                                                <div className="min-w-0">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <p className="text-xs font-black text-neutral-dark dark:text-white">{log.actionLabel || log.action}</p>
+                                                                        {hasDetails && (
+                                                                            <ChevronDown size={13} className={`text-secondary/50 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                                                        )}
+                                                                    </div>
+                                                                    <p className="mt-1 text-[11px] font-bold text-secondary dark:text-gray-400">
+                                                                        {log.userName || 'System'}{log.userRole ? ` - ${log.userRole}` : ''}
+                                                                    </p>
+                                                                </div>
+                                                                <p className="shrink-0 text-[10px] font-bold text-secondary/70 dark:text-gray-400">{formatAuditTimestamp(log.createdAt)}</p>
+                                                            </div>
+                                                            {log.summary && (
+                                                                <p className="mt-2 text-[11px] font-medium text-secondary dark:text-gray-400">{log.summary}</p>
+                                                            )}
+                                                        </button>
+                                                        {isExpanded && hasDetails && (
+                                                            <div className="mx-5 mb-3 rounded-xl border border-neutral-medium/50 dark:border-gray-700/70 bg-neutral-light/40 dark:bg-gray-900/40 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                                <div className="grid grid-cols-[1fr_1fr_1fr] border-b border-neutral-medium/40 dark:border-gray-700/60 bg-white/50 dark:bg-gray-800/50">
+                                                                    <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Field</div>
+                                                                    <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Before</div>
+                                                                    <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">After</div>
+                                                                </div>
+                                                                {detailRows.map((row) => (
+                                                                    <div key={row.key} className="grid grid-cols-[1fr_1fr_1fr] items-start border-b border-neutral-medium/30 dark:border-gray-700/50 last:border-0">
+                                                                        <div className="px-3 py-2 text-[10px] font-black text-neutral-dark dark:text-white">{row.label}</div>
+                                                                        <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                            <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatMeetingAuditValue(row.key, row.before)}</div>
+                                                                        </div>
+                                                                        <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                            <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatMeetingAuditValue(row.key, row.after)}</div>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })
+                                        ) : isMeetingAuditLoading ? (
+                                            <div className="h-[255px] flex flex-col items-center justify-center gap-2 text-xs font-bold text-secondary/60">
+                                                <Loader2 size={16} className="animate-spin text-primary/70" />
+                                                Loading audit logs...
+                                            </div>
+                                        ) : (
+                                            <div className="m-4 py-8 text-center border border-dashed border-neutral-medium dark:border-gray-700 rounded-[2rem] bg-white/40 dark:bg-gray-900/40">
+                                                <p className="text-[9px] text-secondary font-black uppercase tracking-widest opacity-30">No audit logs recorded</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                    {meetingAuditTotalPages > 1 && (
+                                        <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-neutral-medium/40 dark:border-gray-700/60 bg-neutral-light/30 dark:bg-gray-900/30">
+                                            <button
+                                                onClick={() => loadMeetingAuditLogs(selectedItem, Math.max(meetingAuditPage - 1, 1))}
+                                                disabled={isMeetingAuditLoading || meetingAuditPage <= 1}
+                                                className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                Previous
+                                            </button>
+                                            <span className="text-[10px] font-black text-secondary dark:text-gray-400">Page {meetingAuditPage} of {meetingAuditTotalPages}</span>
+                                            <button
+                                                onClick={() => loadMeetingAuditLogs(selectedItem, Math.min(meetingAuditPage + 1, meetingAuditTotalPages))}
+                                                disabled={isMeetingAuditLoading || meetingAuditPage >= meetingAuditTotalPages}
+                                                className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                Next
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </>

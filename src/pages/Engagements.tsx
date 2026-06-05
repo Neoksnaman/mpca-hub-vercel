@@ -20,12 +20,13 @@ import {
     X,
     Plus,
     Edit,
+    ChevronDown,
     MoreVertical,
     Trash2,
     AlertTriangle
 } from 'lucide-react';
 import { UserRole, Status } from '../types';
-import { fetchAllData, addRetainerLog, updateRetainerLog, deleteRetainerLog, addTask, addActivity, updateTask, updateActivity, deleteActivity, deleteTask, updateSpecial, addNotification, fetchSpecialWorklog } from '../services/googleSheetsService';
+import { fetchAllData, addRetainerLog, updateRetainerLog, deleteRetainerLog, fetchAuditLogs, addTask, addActivity, updateTask, updateActivity, deleteActivity, deleteTask, updateSpecial, addNotification, fetchSpecialWorklog } from '../services/googleSheetsService';
 import { months, computeActualDueDate, parseDateStr } from '../utils/dateUtils';
 
 const normalizeId = (id: any) => String(id || '').trim().replace(/^0+/, '') || '0';
@@ -35,6 +36,102 @@ const formatDisplayDate = (dateStr: string) => {
     const [m, d, y] = dateStr.split('/');
     const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
     return date.toLocaleDateString('default', { month: 'long', day: 'numeric', year: 'numeric' });
+};
+
+const formatDateForInput = (dateStr: string) => {
+    if (!dateStr) return '';
+    if (dateStr.includes('-')) return dateStr;
+    if (!dateStr.includes('/')) return '';
+    const [m, d, y] = dateStr.split('/');
+    if (!m || !d || !y) return '';
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+};
+
+const formatAuditTimestamp = (value: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (isNaN(date.getTime())) return value;
+    return date.toLocaleString('default', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+const formatAuditChangeSummary = (details: any) => {
+    const before = details?.before || null;
+    const after = details?.after || null;
+    const dateChanged = (before?.dateCompleted || '') !== (after?.dateCompleted || '');
+    const remarksChanged = (before?.remarks || '') !== (after?.remarks || '');
+
+    if (!before && after?.dateCompleted) {
+        return after?.remarks ? `Filed on ${after.dateCompleted} with remarks.` : `Filed on ${after.dateCompleted}.`;
+    }
+    if (before?.dateCompleted && !after) return before?.remarks ? `Removed filing dated ${before.dateCompleted} and remarks.` : `Removed filing dated ${before.dateCompleted}.`;
+    if (dateChanged && remarksChanged) return 'Updated filing date and remarks.';
+    if (dateChanged) return 'Updated filing date.';
+    if (remarksChanged) return 'Updated filing remarks.';
+    return '';
+};
+
+const formatAuditDetailValue = (value: any) => {
+    const text = String(value ?? '').trim();
+    return text || 'Blank';
+};
+
+const getRetainerAuditDetailRows = (details: any) => {
+    const before = details?.before || {};
+    const after = details?.after || {};
+    return [
+        { label: 'Filing Date', before: before.dateCompleted, after: after.dateCompleted },
+        { label: 'Remarks', before: before.remarks, after: after.remarks }
+    ].filter((row) => String(row.before ?? '') !== String(row.after ?? ''));
+};
+
+const formatFieldLabel = (key: string) => key
+    .replace(/ID$/, '')
+    .replace(/Id$/, '')
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/^./, (char) => char.toUpperCase())
+    .trim();
+
+const getSpecialAuditDetailRows = (details: any) => {
+    const before = details?.before || {};
+    const after = details?.after || {};
+    const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+        .filter((key) => !['specialID', 'taskID', 'activityID'].includes(key));
+    return keys.filter((key) => String(before[key] ?? '') !== String(after[key] ?? '')).map((key) => ({
+        key,
+        label: formatFieldLabel(key),
+        before: before[key],
+        after: after[key]
+    }));
+};
+
+const formatSpecialAuditChangeSummary = (log: any) => {
+    const before = log.details?.before || null;
+    const after = log.details?.after || null;
+    if (!before || !after) return log.summary || '';
+
+    const changedKeys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+        .filter((key) => !['specialID', 'taskID', 'activityID'].includes(key))
+        .filter((key) => String(before[key] ?? '') !== String(after[key] ?? ''));
+    if (changedKeys.length === 0) return log.summary || '';
+
+    const formatChangedFields = (keys: string[]) => {
+        const labels = keys.map((key) => formatFieldLabel(key).toLowerCase());
+        if (labels.length === 1) return labels[0];
+        if (labels.length === 2) return labels.join(' and ');
+        return `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
+    };
+
+    if (changedKeys.length === 1) {
+        const key = changedKeys[0];
+        if (log.action === 'special_progress_updated') {
+            return `Updated ${formatChangedFields(changedKeys)} for "${log.details?.taskName || 'task'}".`;
+        }
+        return `Updated ${formatChangedFields(changedKeys)}.`;
+    }
+    if (log.action === 'special_progress_updated') {
+        return `Updated ${formatChangedFields(changedKeys)} for "${log.details?.taskName || 'task'}".`;
+    }
+    return `Updated ${formatChangedFields(changedKeys)}.`;
 };
 
 const isPeriodBeforeRetainerStart = (startDate: string, monthName: string, year: string | number) => {
@@ -97,6 +194,26 @@ const Engagements: React.FC = () => {
     const [worklogTasks, setWorklogTasks] = useState<any[]>([]);
     const [worklogActivities, setWorklogActivities] = useState<any[]>([]);
     const [isWorklogLoading, setIsWorklogLoading] = useState(false);
+    const [retainerAuditLogs, setRetainerAuditLogs] = useState<any[]>([]);
+    const [isRetainerAuditLoading, setIsRetainerAuditLoading] = useState(false);
+    const [retainerAuditPage, setRetainerAuditPage] = useState(1);
+    const [retainerAuditTotalPages, setRetainerAuditTotalPages] = useState(1);
+    const [expandedRetainerAuditLogId, setExpandedRetainerAuditLogId] = useState<string | null>(null);
+    const [specialAuditLogs, setSpecialAuditLogs] = useState<any[]>([]);
+    const [isSpecialAuditLoading, setIsSpecialAuditLoading] = useState(false);
+    const [specialAuditPage, setSpecialAuditPage] = useState(1);
+    const [specialAuditTotalPages, setSpecialAuditTotalPages] = useState(1);
+    const [expandedSpecialAuditLogId, setExpandedSpecialAuditLogId] = useState<string | null>(null);
+    const [isEditingSpecialInfo, setIsEditingSpecialInfo] = useState(false);
+    const [specialEditForm, setSpecialEditForm] = useState({
+        serviceId: '',
+        projectTitle: '',
+        assignedStaffId: '',
+        status: 'Planning',
+        startDate: '',
+        endDate: '',
+        description: ''
+    });
 
     // Auto-switch tab based on navigation state
     useEffect(() => {
@@ -135,6 +252,13 @@ const Engagements: React.FC = () => {
             window.history.replaceState({}, document.title);
         }
     }, [location.state, location.pathname, specials, clients, navigate]);
+
+    useEffect(() => {
+        if (!isDetailOpen || activeTab !== 'Special') {
+            setIsEditingSpecialInfo(false);
+        }
+    }, [activeTab, isDetailOpen, selectedItem?.id]);
+
     const [showDeleteActivityModal, setShowDeleteActivityModal] = useState(false);
     const [activityToDelete, setActivityToDelete] = useState<any | null>(null);
     const [showDeleteTaskModal, setShowDeleteTaskModal] = useState(false);
@@ -217,25 +341,28 @@ const Engagements: React.FC = () => {
             const formattedDate = `${m}/${d}/${y}`;
 
             if (isEditingDate) {
-                await updateRetainerLog({
+                const result = await updateRetainerLog({
                     deadline: id,
                     period: selectedItem.periodKey,
                     dateCompleted: formattedDate,
                     remarks: remarks
                 });
-                context?.showToast('Log entry updated successfully', 'success');
+                context?.showToast(result?.unchanged ? 'No changes to save.' : 'Log entry updated successfully', result?.unchanged ? 'info' : 'success');
                 setIsEditingDate(false);
+                if (result?.unchanged) return;
             } else {
-                await addRetainerLog({
+                const result = await addRetainerLog({
                     deadline: id,
                     period: selectedItem.periodKey,
                     dateCompleted: formattedDate,
                     remarks: remarks
                 });
-                context?.showToast('Compliance marked as Filed successfully', 'success');
-                setIsDetailOpen(false);
+                context?.showToast(result?.unchanged ? 'No changes to save.' : 'Compliance marked as Filed successfully', result?.unchanged ? 'info' : 'success');
+                if (result?.unchanged) return;
+                if (!result?.unchanged) setIsDetailOpen(false);
             }
             context?.refreshData();
+            if (isDetailOpen) loadRetainerAuditLogs(selectedItem);
         } catch (err: any) {
             context?.showToast(err.message || 'Failed to update status', 'error');
         } finally {
@@ -253,6 +380,7 @@ const Engagements: React.FC = () => {
             setLogToUnfile(null);
             setIsEditingDate(false);
             await context?.refreshData();
+            await loadRetainerAuditLogs(logToUnfile);
         } catch (err: any) {
             context?.showToast(err.message || 'Failed to remove filing', 'error');
         } finally {
@@ -260,13 +388,73 @@ const Engagements: React.FC = () => {
         }
     };
 
-    const handleUpdateSpecialStatus = async (newStatus: string) => {
+    const getUserIdFromDisplayName = useCallback((staffName: string) => {
+        const normalizedName = String(staffName || '').trim().toLowerCase();
+        const staff = allUsers.find(u => {
+            const fullName = `${u.firstName || ''} ${u.lastName || ''}`.trim().toLowerCase();
+            return fullName === normalizedName || String(u.firstName || '').trim().toLowerCase() === normalizedName || String(u.id || '') === staffName;
+        });
+        return staff?.id || staffName || '';
+    }, [allUsers]);
+
+    const activeAssignableUsers = useMemo(() => {
+        if (!user) return [];
+
+        return [...allUsers]
+            .filter(u => {
+                if (u.status !== 'Active') return false;
+
+                if (u.role === UserRole.STAFF || u.role === UserRole.SENIOR) {
+                    if (user.role === UserRole.SENIOR) return u.team === user.team;
+                    return true;
+                }
+
+                if (u.role === UserRole.MANAGER || u.role === UserRole.SUPERVISOR) {
+                    if (user.role === UserRole.ADMIN) return true;
+                    return u.id === user.id;
+                }
+
+                if (u.role === UserRole.ADMIN) {
+                    return user.role === UserRole.ADMIN;
+                }
+
+                return false;
+            })
+            .sort((a, b) => `${a.firstName || ''} ${a.lastName || ''}`.trim().localeCompare(`${b.firstName || ''} ${b.lastName || ''}`.trim()));
+    }, [allUsers, user]);
+
+    const specialProjectServices = useMemo(() => {
+        return (context?.services || [])
+            .filter((s: any) => String(s.type || '').trim().toLowerCase() === 'special')
+            .sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || '')));
+    }, [context?.services]);
+
+    const startEditingSpecialInfo = (item: any) => {
+        setSpecialEditForm({
+            serviceId: item.serviceType || '',
+            projectTitle: item.engagementName || item.projectTitle || '',
+            assignedStaffId: getUserIdFromDisplayName(item.assignedStaff),
+            status: item.status || 'Planning',
+            startDate: formatDateForInput(item.startDate),
+            endDate: formatDateForInput(item.endDate),
+            description: item.description || ''
+        });
+        setIsEditingSpecialInfo(true);
+    };
+
+    const cancelEditingSpecialInfo = () => {
+        setIsEditingSpecialInfo(false);
+    };
+
+    const handleSaveSpecialInfo = async () => {
         if (!selectedItem || isProcessing) return;
+        if (!specialEditForm.projectTitle.trim() || !specialEditForm.serviceId || !specialEditForm.assignedStaffId) {
+            context?.showToast('Project type, title, and assignee are required.', 'error');
+            return;
+        }
 
-        // Validation: If status is being set to Completed, all tasks must be completed first
-        if (newStatus === 'Completed') {
+        if (specialEditForm.status === 'Completed') {
             const incompleteTasks = worklogTasks.filter(t => t.status !== 'Completed');
-
             if (incompleteTasks.length > 0) {
                 context?.showToast(`Cannot complete engagement. ${incompleteTasks.length} task(s) are still pending.`, 'error');
                 return;
@@ -275,11 +463,53 @@ const Engagements: React.FC = () => {
 
         setIsProcessing(true);
         try {
-            await updateSpecial(selectedItem.id, { status: newStatus });
-            context?.showToast(`Status updated to ${newStatus}`, 'success');
+            const oldAssignedStaffId = getUserIdFromDisplayName(selectedItem.assignedStaff);
+            const result = await updateSpecial(selectedItem.id, {
+                assignedStaffId: specialEditForm.assignedStaffId,
+                serviceId: specialEditForm.serviceId,
+                projectTitle: specialEditForm.projectTitle.trim(),
+                startDate: specialEditForm.startDate,
+                endDate: specialEditForm.endDate,
+                status: specialEditForm.status,
+                description: specialEditForm.description
+            });
+            if (result?.unchanged) {
+                context?.showToast('No changes to save.', 'info');
+                setIsEditingSpecialInfo(false);
+                return;
+            }
+
+            if (oldAssignedStaffId !== specialEditForm.assignedStaffId && specialEditForm.assignedStaffId && specialEditForm.assignedStaffId !== user?.id) {
+                const clientName = lookupMaps.clientById.get(normalizeId(selectedItem.clientId))?.name || selectedItem.clientName || 'a client';
+                await addNotification({
+                    userId: specialEditForm.assignedStaffId,
+                    title: 'Special Project Assignment Updated',
+                    message: `You have been assigned to project "${specialEditForm.projectTitle}" for ${clientName}.`,
+                    type: 'Engagement',
+                    link: `/special-projects`
+                }).catch(() => {});
+            }
+
+            const assignedUser = allUsers.find(u => String(u.id) === String(specialEditForm.assignedStaffId));
+            const service = specialProjectServices.find((s: any) => String(s.id) === String(specialEditForm.serviceId));
+            setSelectedItem({
+                ...selectedItem,
+                serviceType: specialEditForm.serviceId,
+                serviceName: service?.name || selectedItem.serviceName,
+                engagementName: specialEditForm.projectTitle.trim(),
+                projectTitle: specialEditForm.projectTitle.trim(),
+                assignedStaff: assignedUser ? `${assignedUser.firstName} ${assignedUser.lastName}`.trim() : selectedItem.assignedStaff,
+                status: specialEditForm.status,
+                startDate: specialEditForm.startDate,
+                endDate: specialEditForm.endDate,
+                description: specialEditForm.description
+            });
+            context?.showToast('Special project updated successfully!', 'success');
+            setIsEditingSpecialInfo(false);
             await context?.refreshData();
+            await loadSpecialAuditLogs(selectedItem);
         } catch (err: any) {
-            context?.showToast(err.message || 'Failed to update status', 'error');
+            context?.showToast(err.message || 'Failed to update special project', 'error');
         } finally {
             setIsProcessing(false);
         }
@@ -296,6 +526,7 @@ const Engagements: React.FC = () => {
             });
             context?.showToast('Task added successfully!', 'success');
             await loadSpecialWorklog(selectedItem.id);
+            await loadSpecialAuditLogs(selectedItem);
             setIsAddingTask(false);
             setNewTaskName('');
         } catch (error: any) {
@@ -330,6 +561,7 @@ const Engagements: React.FC = () => {
 
             context?.showToast('Task updated successfully!', 'success');
             if (selectedItem?.id) await loadSpecialWorklog(selectedItem.id);
+            if (selectedItem?.id) await loadSpecialAuditLogs(selectedItem);
             setEditingTaskId(null);
         } catch (error: any) {
             context?.showToast('Failed to update task: ' + error.message, 'error');
@@ -374,6 +606,7 @@ const Engagements: React.FC = () => {
                 setNewActivityDesc('');
                 context.showToast?.('Progress logged successfully!', 'success');
                 if (selectedItem?.id) await loadSpecialWorklog(selectedItem.id);
+                if (selectedItem?.id) await loadSpecialAuditLogs(selectedItem);
             }
         } catch (error: any) {
             context.showToast?.('Failed to log progress: ' + error.message, 'error');
@@ -415,6 +648,7 @@ const Engagements: React.FC = () => {
                 setEditingActivityId(null);
                 context.showToast?.('Activity updated successfully!', 'success');
                 if (selectedItem?.id) await loadSpecialWorklog(selectedItem.id);
+                if (selectedItem?.id) await loadSpecialAuditLogs(selectedItem);
             }
         } catch (error: any) {
             context.showToast?.('Failed to update activity: ' + error.message, 'error');
@@ -434,6 +668,7 @@ const Engagements: React.FC = () => {
                 setActivityToDelete(null);
                 context.showToast?.('Activity log deleted successfully!', 'success');
                 if (selectedItem?.id) await loadSpecialWorklog(selectedItem.id);
+                if (selectedItem?.id) await loadSpecialAuditLogs(selectedItem);
             }
         } catch (error: any) {
             context.showToast?.('Failed to delete activity: ' + error.message, 'error');
@@ -453,6 +688,7 @@ const Engagements: React.FC = () => {
                 setTaskToDelete(null);
                 context.showToast?.('Task and all associated progress logs deleted successfully!', 'success');
                 if (selectedItem?.id) await loadSpecialWorklog(selectedItem.id);
+                if (selectedItem?.id) await loadSpecialAuditLogs(selectedItem);
             }
         } catch (error: any) {
             context.showToast?.('Failed to delete task: ' + error.message, 'error');
@@ -518,6 +754,21 @@ const Engagements: React.FC = () => {
         return { retainerById, clientById, taxById, serviceById, userByName, retainerLogByDeadlinePeriod };
     }, [retainers, clients, context?.taxCompliances, context?.services, allUsers, retainerLogs]);
 
+    const formatSpecialAuditDetailValue = useCallback((key: string, value: any) => {
+        const text = formatAuditDetailValue(value);
+        if (text === 'Blank') return text;
+        if (key === 'assignedStaffID') {
+            const staff = lookupMaps.userByName.get(String(value)) || lookupMaps.userByName.get(normalizeId(value));
+            const name = staff ? `${staff.firstName || ''} ${staff.lastName || ''}`.trim() : '';
+            return name || text;
+        }
+        if (key === 'serviceID') {
+            const service = lookupMaps.serviceById.get(normalizeId(value));
+            return service?.name || service?.serviceName || text;
+        }
+        return text;
+    }, [lookupMaps.serviceById, lookupMaps.userByName]);
+
     const isAssignedVisible = useCallback((assignedStaff: string) => {
         if (isManagerOrAbove) return true;
         const staffName = String(assignedStaff || '').trim();
@@ -548,11 +799,94 @@ const Engagements: React.FC = () => {
             setActiveMenuActivityId(null);
             setNewTaskName('');
             setNewActivityDesc('');
+            setExpandedRetainerAuditLogId(null);
+            setExpandedSpecialAuditLogId(null);
         }
     }, [selectedItem, isDetailOpen]);
 
 
 
+
+    const loadRetainerAuditLogs = useCallback(async (item = selectedItem, page = 1) => {
+        if (!item || activeTab !== 'Retainer') {
+            setRetainerAuditLogs([]);
+            setRetainerAuditPage(1);
+            setRetainerAuditTotalPages(1);
+            return;
+        }
+
+        setIsRetainerAuditLoading(true);
+        try {
+            const result = await fetchAuditLogs({
+                entityType: 'retainerFiling',
+                entityId: item.id,
+                period: item.periodKey,
+                limit: 5,
+                page
+            });
+            setRetainerAuditLogs(result.logs);
+            setRetainerAuditPage(result.page);
+            setRetainerAuditTotalPages(result.totalPages);
+            setExpandedRetainerAuditLogId(null);
+        } catch (err) {
+            setRetainerAuditLogs([]);
+            setRetainerAuditPage(1);
+            setRetainerAuditTotalPages(1);
+            setExpandedRetainerAuditLogId(null);
+        } finally {
+            setIsRetainerAuditLoading(false);
+        }
+    }, [activeTab, selectedItem]);
+
+    useEffect(() => {
+        if (isDetailOpen && activeTab === 'Retainer' && selectedItem) {
+            loadRetainerAuditLogs(selectedItem, 1);
+        } else {
+            setRetainerAuditLogs([]);
+            setRetainerAuditPage(1);
+            setRetainerAuditTotalPages(1);
+        }
+    }, [activeTab, isDetailOpen, loadRetainerAuditLogs, selectedItem]);
+
+    const loadSpecialAuditLogs = useCallback(async (item = selectedItem, page = 1) => {
+        if (!item || activeTab !== 'Special') {
+            setSpecialAuditLogs([]);
+            setSpecialAuditPage(1);
+            setSpecialAuditTotalPages(1);
+            return;
+        }
+
+        setIsSpecialAuditLoading(true);
+        try {
+            const result = await fetchAuditLogs({
+                entityType: 'specialProject',
+                entityId: item.id,
+                limit: 5,
+                page
+            });
+            setSpecialAuditLogs(result.logs);
+            setSpecialAuditPage(result.page);
+            setSpecialAuditTotalPages(result.totalPages);
+            setExpandedSpecialAuditLogId(null);
+        } catch (err) {
+            setSpecialAuditLogs([]);
+            setSpecialAuditPage(1);
+            setSpecialAuditTotalPages(1);
+            setExpandedSpecialAuditLogId(null);
+        } finally {
+            setIsSpecialAuditLoading(false);
+        }
+    }, [activeTab, selectedItem]);
+
+    useEffect(() => {
+        if (isDetailOpen && activeTab === 'Special' && selectedItem) {
+            loadSpecialAuditLogs(selectedItem, 1);
+        } else {
+            setSpecialAuditLogs([]);
+            setSpecialAuditPage(1);
+            setSpecialAuditTotalPages(1);
+        }
+    }, [activeTab, isDetailOpen, loadSpecialAuditLogs, selectedItem]);
 
     // --- Tab 1: Retainer Monitoring Logic ---
     const retainerAvailableInstances = useMemo(() => {
@@ -1274,7 +1608,7 @@ const Engagements: React.FC = () => {
                                         <div className="space-y-4">
                                             <div className="flex items-center gap-2">
                                                 <div className="w-1 h-4 bg-primary rounded-full" />
-                                                <h4 className="text-sm font-black text-neutral-dark dark:text-white">Historical Audit Trail</h4>
+                                                <h4 className="text-sm font-black text-neutral-dark dark:text-white">Previous Filings</h4>
                                             </div>
                                             <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
                                                 {auditTrail.length === 0 ? (
@@ -1307,61 +1641,277 @@ const Engagements: React.FC = () => {
                                                 )}
                                             </div>
                                         </div>
+
+                                        <div className="space-y-4">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-1 h-4 bg-primary rounded-full" />
+                                                <h4 className="text-sm font-black text-neutral-dark dark:text-white">Audit Logs</h4>
+                                            </div>
+                                            <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
+                                                <div className={`${retainerAuditLogs.length > 0 || isRetainerAuditLoading ? 'min-h-[205px]' : ''} transition-opacity duration-200 ${isRetainerAuditLoading && retainerAuditLogs.length > 0 ? 'opacity-70' : 'opacity-100'}`}>
+                                                    {retainerAuditLogs.length > 0 ? (
+                                                        retainerAuditLogs.map((log) => {
+                                                            const isExpanded = expandedRetainerAuditLogId === log.id;
+                                                            const detailRows = getRetainerAuditDetailRows(log.details);
+                                                            const hasDetails = Boolean(log.details?.before || log.details?.after);
+                                                            return (
+                                                                <div key={log.id} className="border-b border-neutral-medium/40 dark:border-gray-700/60 last:border-0 hover:bg-neutral-light/50 dark:hover:bg-gray-800 transition-colors">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => hasDetails && setExpandedRetainerAuditLogId(isExpanded ? null : log.id)}
+                                                                        className="w-full px-5 py-3 text-left"
+                                                                    >
+                                                                        <div className="flex items-start justify-between gap-4">
+                                                                            <div className="min-w-0">
+                                                                                <div className="flex items-center gap-2">
+                                                                                    <p className="text-xs font-black text-neutral-dark dark:text-white">{log.actionLabel || log.action}</p>
+                                                                                    {hasDetails && (
+                                                                                        <ChevronDown size={13} className={`text-secondary/50 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                                                                    )}
+                                                                                </div>
+                                                                                <p className="mt-1 text-[11px] font-bold text-secondary dark:text-gray-400">
+                                                                                    {log.userName || 'System'}{log.userRole ? ` - ${log.userRole}` : ''}
+                                                                                </p>
+                                                                            </div>
+                                                                            <p className="shrink-0 text-[10px] font-bold text-secondary/70 dark:text-gray-400">{formatAuditTimestamp(log.createdAt)}</p>
+                                                                        </div>
+                                                                        <p className="mt-2 text-[11px] font-medium text-secondary dark:text-gray-400">
+                                                                            {formatAuditChangeSummary(log.details) || log.summary}
+                                                                        </p>
+                                                                    </button>
+                                                                    {isExpanded && (
+                                                                        <div className="mx-5 mb-3 rounded-xl border border-neutral-medium/50 dark:border-gray-700/70 bg-neutral-light/40 dark:bg-gray-900/40 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                                            <div className="grid grid-cols-[1fr_1fr_1fr] border-b border-neutral-medium/40 dark:border-gray-700/60 bg-white/50 dark:bg-gray-800/50">
+                                                                                <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Field</div>
+                                                                                <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Before</div>
+                                                                                <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">After</div>
+                                                                            </div>
+                                                                            {detailRows.map((row) => (
+                                                                                <div key={row.label} className="grid grid-cols-[1fr_1fr_1fr] border-b border-neutral-medium/30 dark:border-gray-700/50 last:border-0">
+                                                                                    <div className="px-3 py-2 text-[10px] font-black text-neutral-dark dark:text-white">{row.label}</div>
+                                                                                    <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                                        <div className="max-h-20 overflow-y-auto break-words pr-1 custom-scrollbar">{formatAuditDetailValue(row.before)}</div>
+                                                                                    </div>
+                                                                                    <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                                        <div className="max-h-20 overflow-y-auto break-words pr-1 custom-scrollbar">{formatAuditDetailValue(row.after)}</div>
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })
+                                                    ) : isRetainerAuditLoading ? (
+                                                        <div className="h-[205px] flex flex-col items-center justify-center gap-2 text-xs font-bold text-secondary/60">
+                                                            <Loader2 size={16} className="animate-spin text-primary/70" />
+                                                            Loading audit logs...
+                                                        </div>
+                                                    ) : (
+                                                        <div className="m-4 py-8 text-center border border-dashed border-neutral-medium dark:border-gray-700 rounded-[2rem] bg-white/40 dark:bg-gray-900/40">
+                                                            <p className="text-[9px] text-secondary font-black uppercase tracking-widest opacity-30">No audit logs recorded</p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {retainerAuditTotalPages > 1 && (
+                                                    <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-neutral-medium/40 dark:border-gray-700/60 bg-neutral-light/30 dark:bg-gray-900/30">
+                                                        <button
+                                                            onClick={() => loadRetainerAuditLogs(selectedItem, Math.max(retainerAuditPage - 1, 1))}
+                                                            disabled={isRetainerAuditLoading || retainerAuditPage <= 1}
+                                                            className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                                        >
+                                                            Previous
+                                                        </button>
+                                                        <span className="text-[10px] font-black text-secondary dark:text-gray-400">Page {retainerAuditPage} of {retainerAuditTotalPages}</span>
+                                                        <button
+                                                            onClick={() => loadRetainerAuditLogs(selectedItem, Math.min(retainerAuditPage + 1, retainerAuditTotalPages))}
+                                                            disabled={isRetainerAuditLoading || retainerAuditPage >= retainerAuditTotalPages}
+                                                            className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                                        >
+                                                            Next
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
                                     </section>
                                 ) : (
                                     <section className="space-y-5 animate-in fade-in slide-in-from-top duration-500">
                                         <div className="space-y-4">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-1 h-4 bg-primary rounded-full" />
-                                                <h3 className="text-sm font-black text-neutral-dark dark:text-white">Project Information</h3>
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-1 h-4 bg-primary rounded-full" />
+                                                    <h3 className="text-sm font-black text-neutral-dark dark:text-white">Project Information</h3>
+                                                </div>
+                                                {!isEditingSpecialInfo && (
+                                                    <button
+                                                        onClick={() => startEditingSpecialInfo(currentItem)}
+                                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-primary border border-primary/20 text-[10px] font-black hover:bg-primary hover:text-white transition-all dark:bg-gray-800 dark:border-primary/30"
+                                                    >
+                                                        <Edit size={13} />
+                                                        Edit Project
+                                                    </button>
+                                                )}
                                             </div>
                                             <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-5 space-y-5">
-                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
-                                                    <div>
-                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Client</p>
-                                                        <p className="text-sm font-black text-neutral-dark dark:text-white leading-tight">{selectedItem.clientName}</p>
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Assigned Staff</p>
-                                                        <StaffAvatar staffName={selectedItem.assignedStaff} allUsers={allUsers} />
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Status</p>
-                                                        <div className="flex">
-                                                            <select
-                                                                value={currentItem.status}
-                                                                onChange={(e) => handleUpdateSpecialStatus(e.target.value)}
+                                                {isEditingSpecialInfo ? (
+                                                    <div className="space-y-4">
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                            <div className="space-y-1">
+                                                                <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1">Project Type</label>
+                                                                <select
+                                                                    value={specialEditForm.serviceId}
+                                                                    onChange={(e) => setSpecialEditForm(prev => ({ ...prev, serviceId: e.target.value }))}
+                                                                    className="w-full px-3 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
+                                                                >
+                                                                    <option value="">Select project type...</option>
+                                                                    {specialProjectServices.map((service: any) => (
+                                                                        <option key={service.id} value={service.id}>{service.name}</option>
+                                                                    ))}
+                                                                </select>
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1">Project Title</label>
+                                                                <input
+                                                                    value={specialEditForm.projectTitle}
+                                                                    onChange={(e) => setSpecialEditForm(prev => ({ ...prev, projectTitle: e.target.value }))}
+                                                                    className="w-full px-3 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
+                                                                    placeholder="Project title"
+                                                                />
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                            <div className="space-y-1">
+                                                                <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1">Assignee</label>
+                                                                <select
+                                                                    value={specialEditForm.assignedStaffId}
+                                                                    onChange={(e) => setSpecialEditForm(prev => ({ ...prev, assignedStaffId: e.target.value }))}
+                                                                    className="w-full px-3 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
+                                                                >
+                                                                    <option value="">Select assignee...</option>
+                                                                    {activeAssignableUsers.map(u => (
+                                                                        <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                                                                    ))}
+                                                                </select>
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1">Status</label>
+                                                                <select
+                                                                    value={specialEditForm.status}
+                                                                    onChange={(e) => setSpecialEditForm(prev => ({ ...prev, status: e.target.value }))}
+                                                                    className="w-full px-3 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
+                                                                >
+                                                                    <option value="Planning">Planning</option>
+                                                                    <option value="In Progress">In Progress</option>
+                                                                    <option value="Completed">Completed</option>
+                                                                    <option value="Blocked">Blocked</option>
+                                                                </select>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                            <div className="space-y-1">
+                                                                <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1">Start Date</label>
+                                                                <input
+                                                                    type="date"
+                                                                    value={specialEditForm.startDate}
+                                                                    onChange={(e) => setSpecialEditForm(prev => ({ ...prev, startDate: e.target.value }))}
+                                                                    className="w-full px-3 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-1">
+                                                                <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1">Due Date</label>
+                                                                <input
+                                                                    type="date"
+                                                                    value={specialEditForm.endDate}
+                                                                    onChange={(e) => setSpecialEditForm(prev => ({ ...prev, endDate: e.target.value }))}
+                                                                    className="w-full px-3 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all"
+                                                                />
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="space-y-1">
+                                                            <label className="text-[9px] font-black text-secondary dark:text-gray-400 uppercase tracking-widest ml-1">Project Description</label>
+                                                            <textarea
+                                                                value={specialEditForm.description}
+                                                                onChange={(e) => setSpecialEditForm(prev => ({ ...prev, description: e.target.value }))}
+                                                                rows={3}
+                                                                className="w-full px-3 py-2.5 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium/70 dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 focus:border-primary/30 outline-none transition-all resize-none"
+                                                                placeholder="Project brief..."
+                                                            />
+                                                        </div>
+
+                                                        <div className="flex justify-end gap-2 pt-2 border-t border-neutral-medium/50 dark:border-gray-700/70">
+                                                            <button
+                                                                onClick={cancelEditingSpecialInfo}
                                                                 disabled={isProcessing}
-                                                                className={`appearance-none px-3 py-1.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer focus:ring-4 focus:ring-primary/5 outline-none disabled:opacity-50 ${currentItem.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' :
-                                                                        currentItem.status === 'In Progress' ? 'bg-blue-500/10 text-blue-600 border-blue-500/20' :
-                                                                            currentItem.status === 'Blocked' ? 'bg-rose-500/10 text-rose-600 border-rose-500/20' :
-                                                                                'bg-neutral-500/10 text-neutral-600 border-neutral-500/20'
-                                                                    }`}
+                                                                className="px-4 py-2.5 border border-neutral-medium dark:border-gray-700 rounded-xl text-[10px] font-black text-secondary dark:text-gray-400 hover:bg-neutral-medium/10 dark:hover:bg-gray-700 transition-all disabled:opacity-50"
                                                             >
-                                                                <option value="Planning">Planning</option>
-                                                                <option value="In Progress">In Progress</option>
-                                                                <option value="Completed">Completed</option>
-                                                                <option value="Blocked">Blocked</option>
-                                                            </select>
+                                                                Cancel
+                                                            </button>
+                                                            <button
+                                                                onClick={handleSaveSpecialInfo}
+                                                                disabled={isProcessing}
+                                                                className="px-5 py-2.5 bg-primary hover:bg-primary-dark text-white rounded-xl text-[10px] font-black shadow-lg shadow-primary/20 transition-all active:scale-95 disabled:opacity-50"
+                                                            >
+                                                                {isProcessing ? 'Saving...' : 'Save Project'}
+                                                            </button>
                                                         </div>
                                                     </div>
-                                                    <div>
-                                                        <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Due Date</p>
-                                                        <div className="flex items-center gap-1.5">
-                                                            <Calendar size={13} className="text-secondary/50" />
-                                                            <p className="text-sm font-bold text-neutral-dark dark:text-white">
-                                                                {formatDisplayDate(selectedItem.endDate) || 'Not specified'}
+                                                ) : (
+                                                    <>
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
+                                                            <div>
+                                                                <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Client</p>
+                                                                <p className="text-sm font-black text-neutral-dark dark:text-white leading-tight">{currentItem.clientName}</p>
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Assigned Staff</p>
+                                                                <StaffAvatar staffName={currentItem.assignedStaff} allUsers={allUsers} />
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Project Type</p>
+                                                                <p className="text-sm font-bold text-neutral-dark dark:text-white">{currentItem.serviceName || currentItem.serviceType || 'Not specified'}</p>
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Status</p>
+                                                                <span className={`inline-flex px-2.5 py-1 rounded-full text-[10px] font-black border ${currentItem.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' :
+                                                                    currentItem.status === 'In Progress' ? 'bg-blue-500/10 text-blue-600 border-blue-500/20' :
+                                                                        currentItem.status === 'Blocked' ? 'bg-rose-500/10 text-rose-600 border-rose-500/20' :
+                                                                            'bg-neutral-500/10 text-neutral-600 border-neutral-500/20'
+                                                                }`}>
+                                                                    {currentItem.status}
+                                                                </span>
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Start Date</p>
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <Calendar size={13} className="text-secondary/50" />
+                                                                    <p className="text-sm font-bold text-neutral-dark dark:text-white">
+                                                                        {formatDisplayDate(currentItem.startDate) || 'Not specified'}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-1">Due Date</p>
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <Calendar size={13} className="text-secondary/50" />
+                                                                    <p className="text-sm font-bold text-neutral-dark dark:text-white">
+                                                                        {formatDisplayDate(currentItem.endDate) || 'Not specified'}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="pt-5 border-t border-neutral-medium/50 dark:border-gray-700/70">
+                                                            <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-2">Project Description</p>
+                                                            <p className="text-sm text-neutral-dark/80 dark:text-gray-300 leading-relaxed font-medium italic">
+                                                                {currentItem.description || "No project description provided."}
                                                             </p>
                                                         </div>
-                                                    </div>
-                                                </div>
-
-                                                <div className="pt-5 border-t border-neutral-medium/50 dark:border-gray-700/70">
-                                                    <p className="text-[10px] font-black text-secondary dark:text-gray-400 mb-2">Project Description</p>
-                                                    <p className="text-sm text-neutral-dark/80 dark:text-gray-300 leading-relaxed font-medium italic">
-                                                        {selectedItem.description || "No project description provided."}
-                                                    </p>
-                                                </div>
+                                                    </>
+                                                )}
                                             </div>
                                         </div>
 
@@ -1763,6 +2313,99 @@ const Engagements: React.FC = () => {
                                             )}
                                             </div>
                                         </div>
+
+                                        <div className="space-y-4">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-1 h-4 bg-primary rounded-full" />
+                                                <h4 className="text-sm font-black text-neutral-dark dark:text-white">Audit Logs</h4>
+                                            </div>
+                                            <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
+                                                <div className={`${specialAuditLogs.length > 0 || isSpecialAuditLoading ? 'min-h-[330px]' : ''} transition-opacity duration-200 ${isSpecialAuditLoading && specialAuditLogs.length > 0 ? 'opacity-70' : 'opacity-100'}`}>
+                                                    {specialAuditLogs.length > 0 ? (
+                                                        specialAuditLogs.map((log) => {
+                                                            const isExpanded = expandedSpecialAuditLogId === log.id;
+                                                            const detailRows = getSpecialAuditDetailRows(log.details);
+                                                            const hasDetails = detailRows.length > 0;
+                                                            return (
+                                                                <div key={log.id} className="border-b border-neutral-medium/40 dark:border-gray-700/60 last:border-0 hover:bg-neutral-light/50 dark:hover:bg-gray-800 transition-colors">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => hasDetails && setExpandedSpecialAuditLogId(isExpanded ? null : log.id)}
+                                                                        className="w-full px-5 py-3 text-left"
+                                                                    >
+                                                                        <div className="flex items-start justify-between gap-4">
+                                                                            <div className="min-w-0">
+                                                                                <div className="flex items-center gap-2">
+                                                                                    <p className="text-xs font-black text-neutral-dark dark:text-white">{log.actionLabel || log.action}</p>
+                                                                                    {hasDetails && (
+                                                                                        <ChevronDown size={13} className={`text-secondary/50 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                                                                    )}
+                                                                                </div>
+                                                                                <p className="mt-1 text-[11px] font-bold text-secondary dark:text-gray-400">
+                                                                                    {log.userName || 'System'}{log.userRole ? ` - ${log.userRole}` : ''}
+                                                                                </p>
+                                                                            </div>
+                                                                            <p className="shrink-0 text-[10px] font-bold text-secondary/70 dark:text-gray-400">{formatAuditTimestamp(log.createdAt)}</p>
+                                                                        </div>
+                                                                        {(formatSpecialAuditChangeSummary(log) || log.summary) && (
+                                                                            <p className="mt-2 text-[11px] font-medium text-secondary dark:text-gray-400">{formatSpecialAuditChangeSummary(log) || log.summary}</p>
+                                                                        )}
+                                                                    </button>
+                                                                    {isExpanded && (
+                                                                        <div className="mx-5 mb-3 rounded-xl border border-neutral-medium/50 dark:border-gray-700/70 bg-neutral-light/40 dark:bg-gray-900/40 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                                            <div className="grid grid-cols-[1fr_1fr_1fr] border-b border-neutral-medium/40 dark:border-gray-700/60 bg-white/50 dark:bg-gray-800/50">
+                                                                                <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Field</div>
+                                                                                <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Before</div>
+                                                                                <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">After</div>
+                                                                            </div>
+                                                                            {detailRows.map((row) => (
+                                                                                <div key={row.label} className="grid grid-cols-[1fr_1fr_1fr] items-start border-b border-neutral-medium/30 dark:border-gray-700/50 last:border-0">
+                                                                                    <div className="px-3 py-2 text-[10px] font-black text-neutral-dark dark:text-white">{row.label}</div>
+                                                                                    <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                                        <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatSpecialAuditDetailValue(row.key, row.before)}</div>
+                                                                                    </div>
+                                                                                    <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                                        <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatSpecialAuditDetailValue(row.key, row.after)}</div>
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })
+                                                    ) : isSpecialAuditLoading ? (
+                                                        <div className="h-[330px] flex flex-col items-center justify-center gap-2 text-xs font-bold text-secondary/60">
+                                                            <Loader2 size={16} className="animate-spin text-primary/70" />
+                                                            Loading audit logs...
+                                                        </div>
+                                                    ) : (
+                                                        <div className="m-4 py-8 text-center border border-dashed border-neutral-medium dark:border-gray-700 rounded-[2rem] bg-white/40 dark:bg-gray-900/40">
+                                                            <p className="text-[9px] text-secondary font-black uppercase tracking-widest opacity-30">No audit logs recorded</p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {specialAuditTotalPages > 1 && (
+                                                    <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-neutral-medium/40 dark:border-gray-700/60 bg-neutral-light/30 dark:bg-gray-900/30">
+                                                        <button
+                                                            onClick={() => loadSpecialAuditLogs(selectedItem, Math.max(specialAuditPage - 1, 1))}
+                                                            disabled={isSpecialAuditLoading || specialAuditPage <= 1}
+                                                            className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                                        >
+                                                            Previous
+                                                        </button>
+                                                        <span className="text-[10px] font-black text-secondary dark:text-gray-400">Page {specialAuditPage} of {specialAuditTotalPages}</span>
+                                                        <button
+                                                            onClick={() => loadSpecialAuditLogs(selectedItem, Math.min(specialAuditPage + 1, specialAuditTotalPages))}
+                                                            disabled={isSpecialAuditLoading || specialAuditPage >= specialAuditTotalPages}
+                                                            className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                                        >
+                                                            Next
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
                                     </section>
                                 );
                             })()}
@@ -1878,7 +2521,7 @@ const Engagements: React.FC = () => {
                                 Unfile Compliance?
                             </h3>
                             <p className="text-sm text-secondary dark:text-gray-400 mb-8 leading-relaxed">
-                                This will remove the filed date and remarks for <span className="font-bold text-neutral-dark dark:text-white">"{logToUnfile.engagementName}"</span>.<br />
+                                This will remove the filed date and remarks for <span className="font-bold text-neutral-dark dark:text-white">"{logToUnfile.complianceName || logToUnfile.engagementName || 'this compliance'}"</span>.<br />
                                 <span className="text-rose-600 dark:text-rose-400 font-medium">The compliance will return to Pending or Late based on its deadline.</span><br />
                                 This action cannot be undone.
                             </p>

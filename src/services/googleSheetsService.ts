@@ -282,6 +282,17 @@ export const deleteRetainerLog = (deadline: string, period: string) => {
     return apiCall<any>(`/api/retainer-logs?${params.toString()}`, { method: 'DELETE' });
 };
 
+export const fetchAuditLogs = (params: { entityType: string; entityId: string; period?: string; limit?: number; page?: number }) => {
+    const query = new URLSearchParams({
+        entityType: params.entityType,
+        entityId: params.entityId,
+        limit: String(params.limit || 5),
+        page: String(params.page || 1)
+    });
+    if (params.period) query.set('period', params.period);
+    return apiCall<{ logs: any[]; total: number; page: number; totalPages: number }>(`/api/audit-logs?${query.toString()}`);
+};
+
 export const fetchSpecialWorklog = (specialID: string) =>
     apiCall<{ taskLog: any[]; activityLog: any[] }>(`/api/specials/${specialID}/worklog`);
 

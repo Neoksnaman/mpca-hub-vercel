@@ -448,6 +448,83 @@ function mapMongoRetainerLog(log: any) {
   ];
 }
 
+function mapMongoAuditLog(log: any) {
+  return {
+    id: String(log?._id || ''),
+    entityType: log?.entityType || '',
+    entityId: log?.entityId || '',
+    relatedEntityType: log?.relatedEntityType || '',
+    relatedEntityId: log?.relatedEntityId || '',
+    period: log?.period || '',
+    action: log?.action || '',
+    actionLabel: log?.actionLabel || '',
+    summary: log?.summary || '',
+    userId: log?.userId || '',
+    userName: log?.userName || 'System',
+    userRole: log?.userRole || '',
+    details: log?.details || {},
+    createdAt: log?.createdAt instanceof Date ? log.createdAt.toISOString() : log?.createdAt || ''
+  };
+}
+
+async function writeAuditLog(db: any, req: any, data: any) {
+  const requestUser = await getRequestUser(req);
+  const userName = requestUser
+    ? `${requestUser.firstName || ''} ${requestUser.lastName || ''}`.trim() || requestUser.userName || 'Unknown User'
+    : 'System';
+
+  await db.collection('auditLogs').insertOne({
+    _id: crypto.randomUUID(),
+    userId: requestUser?.userID || requestUser?._id || '',
+    userName,
+    userRole: requestUser?.role || '',
+    createdAt: new Date(),
+    ...data,
+  });
+}
+
+async function getServiceAuditName(db: any, serviceId: any) {
+  const ids = userIdCandidates(serviceId);
+  const service = await db.collection('services').findOne({
+    $or: [{ _id: { $in: ids } }, { serviceID: { $in: ids } }]
+  });
+  return service?.serviceName || service?.name || service?.type || String(serviceId || 'service');
+}
+
+async function getDeadlineAuditContext(db: any, deadlineId: any) {
+  const ids = userIdCandidates(deadlineId);
+  const deadline = await db.collection('deadlines').findOne({
+    $or: [{ _id: { $in: ids } }, { deadlineID: { $in: ids } }]
+  });
+  const retainerIds = userIdCandidates(deadline?.retainerID || '');
+  const retainer = deadline?.retainerID
+    ? await db.collection('retainerEngagements').findOne({
+      $or: [{ _id: { $in: retainerIds } }, { retainerID: { $in: retainerIds } }]
+    })
+    : null;
+  return {
+    clientID: String(retainer?.clientID || ''),
+    retainerID: String(deadline?.retainerID || ''),
+    deadlineID: String(deadline?.deadlineID || deadline?._id || deadlineId || ''),
+    serviceID: String(deadline?.serviceID || retainer?.serviceID || ''),
+    taxID: String(deadline?.taxID || ''),
+    assignedStaffID: String(retainer?.assignedStaffID || '')
+  };
+}
+
+async function getSpecialAuditContext(db: any, specialId: any) {
+  const ids = userIdCandidates(specialId);
+  const special = await db.collection('specialEngagements').findOne({
+    $or: [{ _id: { $in: ids } }, { specialID: { $in: ids } }]
+  });
+  return {
+    clientID: String(special?.clientID || ''),
+    specialID: String(special?.specialID || special?._id || specialId || ''),
+    serviceID: String(special?.serviceID || ''),
+    assignedStaffID: String(special?.assignedStaffID || '')
+  };
+}
+
 function mapMongoCredential(credential: any) {
   return {
     credentialID: String(credential?.credentialID || credential?._id || ''),
@@ -546,6 +623,7 @@ async function ensureMongoIndexes() {
         createIndex('chatThreads', { participantUserIDs: 1, lastMessageAt: -1 }),
         createIndex('chatThreads', { participantKey: 1 }),
         createIndex('chatMessages', { threadId: 1, createdAt: -1 }),
+        createIndex('auditLogs', { entityType: 1, entityId: 1, period: 1, createdAt: -1 }),
       ]);
     }).catch(error => {
       mongoIndexPromise = null;
@@ -810,6 +888,9 @@ app.put('/api/users/:id', async (req, res) => {
   try {
     const db = await getMongoDb();
     const ids = userIdCandidates(id);
+    const existingSpecial = await db.collection<any>('specialEngagements').findOne({
+      $or: [{ _id: { $in: ids } }, { specialID: { $in: ids } }]
+    });
     const updates: any = { updatedAt: new Date() };
     const nextUserName = userName ?? username;
 
@@ -1518,6 +1599,18 @@ app.post('/api/transmittals', async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date()
     });
+    await writeAuditLog(db, req, {
+      entityType: 'transmittal',
+      entityId: nextId,
+      action: 'transmittal_created',
+      actionLabel: 'Created Transmittal',
+      summary: `Created transmittal #${nextId} with ${(data.items || '').split('||').filter(Boolean).length} item(s).`,
+      details: {
+        transmittalID: nextId,
+        clientID: data.clientID || '',
+        userID: data.userID || ''
+      }
+    });
 
     res.json({ success: true, transmittalID: nextId });
   } catch (error: any) {
@@ -1532,6 +1625,7 @@ app.post('/api/meetings', async (req, res) => {
     const db = await getMongoDb();
     const collection = db.collection<any>('meetings');
     const nextId = newRecordId('mtg');
+    const attendeeCount = String(data.userIDs || '').split(',').filter(Boolean).length;
 
     await collection.insertOne({
       _id: nextId,
@@ -1542,6 +1636,18 @@ app.post('/api/meetings', async (req, res) => {
       momUrl: data.momUrl || '',
       createdAt: new Date(),
       updatedAt: new Date()
+    });
+    await writeAuditLog(db, req, {
+      entityType: 'meeting',
+      entityId: nextId,
+      action: 'meeting_created',
+      actionLabel: 'Created Meeting',
+      summary: `Created meeting "${data.subject || 'Untitled Meeting'}" with ${attendeeCount} attendee(s).`,
+      details: {
+        meetingID: nextId,
+        date: data.date || '',
+        attendeeCount
+      }
     });
 
     res.json({ success: true, meetingID: nextId });
@@ -1555,7 +1661,58 @@ app.put('/api/transmittals/:id', async (req, res) => {
   const data = req.body;
   try {
     const db = await getMongoDb();
-    const result = await db.collection<any>('transmittals').updateOne(
+    const existingTransmittal = await db.collection<any>('transmittals').findOne({ _id: id });
+    if (!existingTransmittal) return res.status(404).json({ error: 'Transmittal not found' });
+    const beforeItemCount = String(existingTransmittal?.items || '').split('||').filter(Boolean).length;
+    const afterItemCount = String(data.items || '').split('||').filter(Boolean).length;
+    const attachmentChanged = String(existingTransmittal?.receiptUrl || '') !== String(data.receiptUrl || '');
+    const fieldChanges: string[] = [];
+    const changeDetails: any = {
+      transmittalID: String(existingTransmittal?.transmittalID || existingTransmittal?._id || id),
+      before: {},
+      after: {}
+    };
+    const addChange = (label: string, key: string, beforeValue: any, afterValue: any) => {
+      const beforeText = String(beforeValue || '').trim();
+      const afterText = String(afterValue || '').trim();
+      if (beforeText === afterText) return;
+      fieldChanges.push(label);
+      changeDetails.before[key] = beforeText;
+      changeDetails.after[key] = afterText;
+    };
+
+    addChange('client', 'clientID', existingTransmittal?.clientID, data.clientID);
+    addChange('representative', 'userID', existingTransmittal?.userID, data.userID);
+    addChange('date', 'date', existingTransmittal?.date, data.date);
+    addChange('receiver name', 'receiverName', existingTransmittal?.receiverName, data.receiverName);
+    addChange('receiver address', 'receiverAddress', existingTransmittal?.receiverAddress, data.receiverAddress);
+    if (String(existingTransmittal?.items || '') !== String(data.items || '')) {
+      fieldChanges.push('document manifest');
+      changeDetails.before.itemCount = beforeItemCount;
+      changeDetails.after.itemCount = afterItemCount;
+    }
+    if (attachmentChanged) {
+      fieldChanges.push('official slip');
+      changeDetails.before.receiptUrl = existingTransmittal?.receiptUrl || '';
+      changeDetails.after.receiptUrl = data.receiptUrl || '';
+    }
+
+    if (fieldChanges.length === 0) {
+      return res.status(200).json({ success: true, unchanged: true });
+    }
+
+    const formatChangeList = (changes: string[]) => {
+      if (changes.length === 0) return 'No visible field changes detected.';
+      if (changes.length === 1) return changes[0];
+      if (changes.length === 2) return `${changes[0]} and ${changes[1]}`;
+      return `${changes.slice(0, -1).join(', ')}, and ${changes[changes.length - 1]}`;
+    };
+
+    const summary = attachmentChanged && fieldChanges.length === 1
+      ? (data.receiptUrl ? 'Attached official transmittal slip.' : 'Removed official transmittal slip.')
+      : `Updated ${formatChangeList(fieldChanges)}.`;
+
+    await db.collection<any>('transmittals').updateOne(
       { _id: id },
       {
         $set: {
@@ -1570,7 +1727,15 @@ app.put('/api/transmittals/:id', async (req, res) => {
         }
       }
     );
-    if (result.matchedCount === 0) return res.status(404).json({ error: 'Transmittal not found' });
+
+    await writeAuditLog(db, req, {
+      entityType: 'transmittal',
+      entityId: String(existingTransmittal?.transmittalID || existingTransmittal?._id || id),
+      action: attachmentChanged ? 'transmittal_attachment_updated' : 'transmittal_updated',
+      actionLabel: attachmentChanged ? 'Updated Official Slip' : 'Updated Transmittal',
+      summary,
+      details: changeDetails
+    });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1582,7 +1747,55 @@ app.put('/api/meetings/:id', async (req, res) => {
   const data = req.body;
   try {
     const db = await getMongoDb();
-    const result = await db.collection<any>('meetings').updateOne(
+    const existingMeeting = await db.collection<any>('meetings').findOne({ _id: id });
+    if (!existingMeeting) return res.status(404).json({ error: 'Meeting not found' });
+    const normalizeUserIds = (value: any) => String(value || '').split(',').map((item) => item.trim()).filter(Boolean).sort().join(',');
+    const countUserIds = (value: any) => String(value || '').split(',').map((item) => item.trim()).filter(Boolean).length;
+    const fieldChanges: string[] = [];
+    const changeDetails: any = {
+      meetingID: String(existingMeeting?.meetingID || existingMeeting?._id || id),
+      before: {},
+      after: {}
+    };
+    const addChange = (label: string, key: string, beforeValue: any, afterValue: any) => {
+      const beforeText = String(beforeValue || '').trim();
+      const afterText = String(afterValue || '').trim();
+      if (beforeText === afterText) return;
+      fieldChanges.push(label);
+      changeDetails.before[key] = beforeText;
+      changeDetails.after[key] = afterText;
+    };
+    const formatChangeList = (changes: string[]) => {
+      if (changes.length === 1) return changes[0];
+      if (changes.length === 2) return `${changes[0]} and ${changes[1]}`;
+      return `${changes.slice(0, -1).join(', ')}, and ${changes[changes.length - 1]}`;
+    };
+
+    addChange('subject', 'subject', existingMeeting?.subject, data.subject);
+    addChange('date', 'date', existingMeeting?.date, data.date);
+    if (normalizeUserIds(existingMeeting?.userIDs) !== normalizeUserIds(data.userIDs)) {
+      fieldChanges.push('attendees');
+      changeDetails.before.attendeeCount = countUserIds(existingMeeting?.userIDs);
+      changeDetails.after.attendeeCount = countUserIds(data.userIDs);
+      changeDetails.before.userIDs = existingMeeting?.userIDs || '';
+      changeDetails.after.userIDs = data.userIDs || '';
+    }
+    const attachmentChanged = String(existingMeeting?.momUrl || '') !== String(data.momUrl || '');
+    if (attachmentChanged) {
+      fieldChanges.push('minutes attachment');
+      changeDetails.before.momUrl = existingMeeting?.momUrl || '';
+      changeDetails.after.momUrl = data.momUrl || '';
+    }
+
+    if (fieldChanges.length === 0) {
+      return res.status(200).json({ success: true, unchanged: true });
+    }
+
+    const summary = attachmentChanged && fieldChanges.length === 1
+      ? (data.momUrl ? 'Attached minutes of meeting.' : 'Removed minutes of meeting.')
+      : `Updated ${formatChangeList(fieldChanges)}.`;
+
+    await db.collection<any>('meetings').updateOne(
       { _id: id },
       {
         $set: {
@@ -1594,7 +1807,15 @@ app.put('/api/meetings/:id', async (req, res) => {
         }
       }
     );
-    if (result.matchedCount === 0) return res.status(404).json({ error: 'Meeting not found' });
+
+    await writeAuditLog(db, req, {
+      entityType: 'meeting',
+      entityId: String(existingMeeting?.meetingID || existingMeeting?._id || id),
+      action: attachmentChanged ? 'meeting_attachment_updated' : 'meeting_updated',
+      actionLabel: attachmentChanged ? 'Updated Minutes Attachment' : 'Updated Meeting',
+      summary,
+      details: changeDetails
+    });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1624,6 +1845,14 @@ app.post('/api/clients', async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
+    await writeAuditLog(db, req, {
+      entityType: 'client',
+      entityId: nextId,
+      action: 'client_created',
+      actionLabel: 'Created Client',
+      summary: `Created client profile for ${client.name || 'new client'}.`,
+      details: { clientID: nextId }
+    });
 
     console.log('[API] Successfully added client:', nextId);
     return res.status(200).json({ 
@@ -1646,6 +1875,32 @@ app.put('/api/clients/:id', async (req, res) => {
   try {
     const db = await getMongoDb();
     const ids = userIdCandidates(id);
+    const existingClient = await db.collection<any>('clients').findOne({
+      $or: [{ _id: { $in: ids } }, { clientID: { $in: ids } }]
+    });
+    const clientBefore = {
+      name: existingClient?.clientName || '',
+      tin: existingClient?.tin || '',
+      entityType: existingClient?.entityType || '',
+      email: existingClient?.email || '',
+      contactPerson: existingClient?.contactPerson || '',
+      status: existingClient?.status || '',
+      fiscalYearEnd: existingClient?.fiscalYearEnd || ''
+    };
+    const clientAfter = {
+      name: updatedClient.name || '',
+      tin: updatedClient.tin || '',
+      entityType: updatedClient.entityType || updatedClient.entity_type || '',
+      email: updatedClient.email || '',
+      contactPerson: updatedClient.contactPerson || '',
+      status: updatedClient.status || 'Active',
+      fiscalYearEnd: updatedClient.fiscalYearEnd || ''
+    };
+    const clientDetails = buildChangedAuditDetails(clientBefore, clientAfter);
+    if (existingClient && clientDetails.changedKeys.length === 0) {
+      return res.status(200).json({ success: true, unchanged: true });
+    }
+
     const result = await db.collection<any>('clients').updateOne(
       { $or: [{ _id: { $in: ids } }, { clientID: { $in: ids } }] },
       {
@@ -1663,6 +1918,18 @@ app.put('/api/clients/:id', async (req, res) => {
     );
 
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Client not found' });
+    await writeAuditLog(db, req, {
+      entityType: 'client',
+      entityId: String(existingClient?.clientID || existingClient?._id || id),
+      action: 'client_profile_updated',
+      actionLabel: 'Updated Client Profile',
+      summary: buildFieldChangeSummary(clientBefore, clientAfter, `Updated client profile details for ${updatedClient.name || existingClient?.clientName || 'this client'}.`),
+      details: {
+        clientID: String(existingClient?.clientID || existingClient?._id || id),
+        before: clientDetails.before,
+        after: clientDetails.after
+      }
+    });
 
     console.log('[API] Successfully updated client:', id);
     return res.status(200).json({ success: true });
@@ -1683,6 +1950,64 @@ app.put('/api/retainers/:id', async (req, res) => {
     const ids = userIdCandidates(id);
     const retainerId = toPaddedId(id);
     const normalizedServiceId = toPaddedId(serviceId);
+    const existingRetainer = await db.collection<any>('retainerEngagements').findOne({
+      $or: [{ _id: { $in: ids } }, { retainerID: { $in: ids } }]
+    });
+    if (!existingRetainer) return res.status(404).json({ error: 'Retainer not found' });
+
+    const deadlineCollection = db.collection<any>('deadlines');
+    const existingDeadlines = await deadlineCollection
+      .find({ retainerID: { $in: ids } })
+      .toArray();
+    const now = new Date();
+    const getNextDeadlineId = () => newRecordId('dl');
+    const formatDeadlineEntry = (serviceValue: any, taxValue: any, dueDateValue: any) =>
+      `${toPaddedId(serviceValue)}:${toPaddedId(taxValue || '')}:${dueDateValue || ''}`;
+    const getDeadlineConfigMap = (rows: any[]) => new Map(rows
+      .filter((row: any) => String(row?.status || 'Active') !== 'Inactive')
+      .map((row: any) => [`${toPaddedId(row.serviceID)}:${toPaddedId(row.taxID || '')}`, row.dueDate || '']));
+    const beforeDeadlineMap = getDeadlineConfigMap(existingDeadlines);
+    const afterDeadlineMap = new Map<string, string>();
+    if (isTaxComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
+      selectedTaxes.forEach((tax: any) => {
+        afterDeadlineMap.set(`${normalizedServiceId}:${toPaddedId(tax.taxID)}`, tax.dueDateCode || '');
+      });
+    } else if (dueDateCode) {
+      afterDeadlineMap.set(`${normalizedServiceId}:`, dueDateCode);
+    }
+    const affectedDeadlineKeys = Array.from(new Set([...beforeDeadlineMap.keys(), ...afterDeadlineMap.keys()]))
+      .filter((key) => String(beforeDeadlineMap.get(key) || '') !== String(afterDeadlineMap.get(key) || ''))
+      .sort();
+    const affectedBeforeDeadlineConfig = affectedDeadlineKeys
+      .filter((key) => beforeDeadlineMap.has(key))
+      .map((key) => {
+        const [serviceKey, taxKey] = key.split(':');
+        return formatDeadlineEntry(serviceKey, taxKey, beforeDeadlineMap.get(key));
+      })
+      .join(' | ');
+    const affectedAfterDeadlineConfig = affectedDeadlineKeys
+      .filter((key) => afterDeadlineMap.has(key))
+      .map((key) => {
+        const [serviceKey, taxKey] = key.split(':');
+        return formatDeadlineEntry(serviceKey, taxKey, afterDeadlineMap.get(key));
+      })
+      .join(' | ');
+    const retainerBefore = {
+      serviceID: existingRetainer?.serviceID || '',
+      assignedStaffID: existingRetainer?.assignedStaffID || '',
+      startDate: existingRetainer?.startDate || '',
+      deadlineConfig: affectedBeforeDeadlineConfig
+    };
+    const retainerAfter = {
+      serviceID: normalizedServiceId,
+      assignedStaffID: assignedStaffId,
+      startDate,
+      deadlineConfig: affectedAfterDeadlineConfig
+    };
+    const retainerDetails = buildChangedAuditDetails(retainerBefore, retainerAfter);
+    if (retainerDetails.changedKeys.length === 0) {
+      return res.status(200).json({ success: true, unchanged: true });
+    }
 
     const result = await db.collection<any>('retainerEngagements').updateOne(
       { $or: [{ _id: { $in: ids } }, { retainerID: { $in: ids } }] },
@@ -1693,19 +2018,12 @@ app.put('/api/retainers/:id', async (req, res) => {
           startDate,
           status: 'Active',
           assignedStaffID: assignedStaffId,
-          updatedAt: new Date(),
+          updatedAt: now,
         }
       }
     );
 
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Retainer not found' });
-
-    const deadlineCollection = db.collection<any>('deadlines');
-    const existingDeadlines = await deadlineCollection
-      .find({ retainerID: { $in: ids } })
-      .toArray();
-    const now = new Date();
-    const getNextDeadlineId = () => newRecordId('dl');
 
     if (isTaxComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
       const selectedTaxRows = selectedTaxes
@@ -1722,6 +2040,8 @@ app.put('/api/retainers/:id', async (req, res) => {
       );
 
       for (const tax of selectedTaxRows) {
+        const deadlineKey = `${normalizedServiceId}:${tax.taxID}`;
+        if (!affectedDeadlineKeys.includes(deadlineKey)) continue;
         const existingDeadline = existingByTaxId.get(tax.taxID);
         if (existingDeadline) {
           await deadlineCollection.updateOne(
@@ -1764,33 +2084,36 @@ app.put('/api/retainers/:id', async (req, res) => {
       }
     } else if (dueDateCode) {
       const existingDeadline = existingDeadlines.find((deadline: any) => toPaddedId(deadline.serviceID) === normalizedServiceId && !deadline.taxID);
-      if (existingDeadline) {
-        await deadlineCollection.updateOne(
-          { _id: existingDeadline._id },
-          {
-            $set: {
-              retainerID: retainerId,
-              serviceID: normalizedServiceId,
-              taxID: '',
-              dueDate: dueDateCode,
-              status: 'Active',
-              updatedAt: now,
+      const deadlineKey = `${normalizedServiceId}:`;
+      if (affectedDeadlineKeys.includes(deadlineKey)) {
+        if (existingDeadline) {
+          await deadlineCollection.updateOne(
+            { _id: existingDeadline._id },
+            {
+              $set: {
+                retainerID: retainerId,
+                serviceID: normalizedServiceId,
+                taxID: '',
+                dueDate: dueDateCode,
+                status: 'Active',
+                updatedAt: now,
+              }
             }
-          }
-        );
-      } else {
-        const deadlineID = getNextDeadlineId();
-        await deadlineCollection.insertOne({
-          _id: deadlineID,
-          deadlineID,
-          retainerID: retainerId,
-          serviceID: normalizedServiceId,
-          taxID: '',
-          dueDate: dueDateCode,
-          status: 'Active',
-          createdAt: now,
-          updatedAt: now,
-        });
+          );
+        } else {
+          const deadlineID = getNextDeadlineId();
+          await deadlineCollection.insertOne({
+            _id: deadlineID,
+            deadlineID,
+            retainerID: retainerId,
+            serviceID: normalizedServiceId,
+            taxID: '',
+            dueDate: dueDateCode,
+            status: 'Active',
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
       }
 
       const removedDeadlineIds = existingDeadlines
@@ -1810,6 +2133,25 @@ app.put('/api/retainers/:id', async (req, res) => {
     }
 
     console.log('[API] Successfully updated retainer and deadlines:', id);
+    if (retainerDetails.changedKeys.length > 0) {
+      const serviceName = await getServiceAuditName(db, normalizedServiceId);
+      const retainerSummary = buildServiceAwareChangeSummary(retainerBefore, retainerAfter, 'Updated retainer service details.', serviceName);
+      await writeAuditLog(db, req, {
+        entityType: 'client',
+        entityId: String(existingRetainer?.clientID || clientId || ''),
+        action: 'client_retainer_updated',
+        actionLabel: 'Updated Retainer Service',
+        summary: retainerSummary,
+        details: {
+          clientID: String(existingRetainer?.clientID || clientId || ''),
+          retainerID: String(existingRetainer?.retainerID || existingRetainer?._id || id),
+          serviceID: normalizedServiceId,
+          assignedStaffID: String(retainerAfter.assignedStaffID || ''),
+          before: retainerDetails.before,
+          after: retainerDetails.after
+        }
+      });
+    }
     return res.status(200).json({ success: true });
   } catch (error: any) {
     console.error('[API] Error updating retainer:', error);
@@ -1829,12 +2171,29 @@ app.delete('/api/retainers/:id', async (req, res) => {
     }
 
     const ids = userIdCandidates(id);
+    const existingRetainer = await db.collection<any>('retainerEngagements').findOne({
+      $or: [{ _id: { $in: ids } }, { retainerID: { $in: ids } }]
+    });
     const result = await db.collection<any>('retainerEngagements').deleteOne({
       $or: [{ _id: { $in: ids } }, { retainerID: { $in: ids } }]
     });
     await db.collection<any>('deadlines').deleteMany({ retainerID: { $in: ids } });
 
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Retainer not found' });
+    const serviceName = await getServiceAuditName(db, existingRetainer?.serviceID || '');
+    await writeAuditLog(db, req, {
+      entityType: 'client',
+      entityId: String(existingRetainer?.clientID || ''),
+      action: 'client_retainer_deleted',
+      actionLabel: 'Deleted Retainer Service',
+      summary: `Deleted retainer service "${serviceName}" and associated deadlines.`,
+      details: {
+        clientID: String(existingRetainer?.clientID || ''),
+        retainerID: String(existingRetainer?.retainerID || existingRetainer?._id || id),
+        serviceID: existingRetainer?.serviceID || '',
+        assignedStaffID: existingRetainer?.assignedStaffID || ''
+      }
+    });
 
     console.log('[API] Successfully deleted retainer and deadlines:', id);
     return res.status(200).json({ success: true });
@@ -1909,6 +2268,20 @@ app.post('/api/retainers', async (req, res) => {
       if (deadlineRows.length > 0) {
         await deadlineCollection.insertMany(deadlineRows);
       }
+      const serviceName = await getServiceAuditName(db, normalizedServiceId);
+      await writeAuditLog(db, req, {
+        entityType: 'client',
+        entityId: String(clientId || ''),
+        action: 'client_retainer_added',
+        actionLabel: 'Added Retainer Service',
+        summary: `Added retainer service "${serviceName}".`,
+        details: {
+          clientID: String(clientId || ''),
+          retainerID: retainerId,
+          serviceID: normalizedServiceId,
+          assignedStaffID: String(assignedStaffId || '')
+        }
+      });
       
       results.push({ retainerId, serviceId: normalizedServiceId });
     }
@@ -1927,6 +2300,107 @@ const formatDateToMDY = (dateStr: string) => {
   const [y, m, d] = parts;
   return `${m}/${d}/${y}`;
 };
+
+function buildRetainerFilingAuditSummary(before: any, after: any) {
+  if (!before && after?.dateCompleted) {
+    return after?.remarks ? `Filed on ${after.dateCompleted} with remarks.` : `Filed on ${after.dateCompleted}.`;
+  }
+  if (before?.dateCompleted && !after) {
+    return before?.remarks ? `Removed filing dated ${before.dateCompleted} and remarks.` : `Removed filing dated ${before.dateCompleted}.`;
+  }
+
+  const dateChanged = String(before?.dateCompleted || '') !== String(after?.dateCompleted || '');
+  const remarksChanged = String(before?.remarks || '') !== String(after?.remarks || '');
+  if (dateChanged && remarksChanged) {
+    return 'Updated filing date and remarks.';
+  }
+  if (dateChanged) return 'Updated filing date.';
+  if (remarksChanged) return 'Updated filing remarks.';
+  return 'No visible filing changes detected.';
+}
+
+function formatAuditFieldLabel(key: string) {
+  return key
+    .replace(/ID$/, '')
+    .replace(/Id$/, '')
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/^./, char => char.toUpperCase())
+    .trim();
+}
+
+function formatAuditList(items: string[]) {
+  if (items.length === 0) return '';
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
+}
+
+function buildFieldChangeSummary(before: any, after: any, fallback: string) {
+  const changedKeys = Array.from(new Set([...Object.keys(before || {}), ...Object.keys(after || {})]))
+    .filter((key) => !['specialID', 'taskID', 'activityID'].includes(key))
+    .filter((key) => String(before?.[key] ?? '') !== String(after?.[key] ?? ''));
+  if (changedKeys.length === 0) return fallback;
+  if (changedKeys.length === 1) {
+    const key = changedKeys[0];
+    if (key === 'description') return 'Updated description.';
+    if (key === 'deadlineConfig') return 'Updated deadline configuration.';
+    if (key === 'password') return 'Updated password.';
+    if (key === 'securityAnswer') return 'Updated security answer.';
+    if (key.endsWith('ID') || key.endsWith('Id')) return `Updated ${formatAuditFieldLabel(key).toLowerCase().replace(' id', '')}.`;
+    return `Updated ${formatAuditFieldLabel(key).toLowerCase()}: ${before?.[key] || 'blank'} > ${after?.[key] || 'blank'}.`;
+  }
+  return `Updated ${formatAuditList(changedKeys.map((key) => formatAuditFieldLabel(key).toLowerCase()))}.`;
+}
+
+function buildServiceAwareChangeSummary(before: any, after: any, fallback: string, serviceName = '') {
+  const changedKeys = Array.from(new Set([...Object.keys(before || {}), ...Object.keys(after || {})]))
+    .filter((key) => !['specialID', 'taskID', 'activityID'].includes(key))
+    .filter((key) => String(before?.[key] ?? '') !== String(after?.[key] ?? ''));
+  if (changedKeys.length === 0) return fallback;
+
+  const suffix = serviceName ? ` for ${serviceName}` : '';
+  if (changedKeys.length === 1) {
+    const key = changedKeys[0];
+    const label = key === 'deadlineConfig' ? 'deadline configuration' : formatAuditFieldLabel(key).toLowerCase();
+    if (key === 'password') return 'Updated password.';
+    if (key === 'securityAnswer') return 'Updated security answer.';
+    return `Updated ${label}${suffix}.`;
+  }
+
+  return `Updated ${formatAuditList(changedKeys.map((key) => key === 'deadlineConfig' ? 'deadline configuration' : formatAuditFieldLabel(key).toLowerCase()))}${suffix}.`;
+}
+
+function buildProgressChangeSummary(before: any, after: any, taskName: string) {
+  const changedKeys = Array.from(new Set([...Object.keys(before || {}), ...Object.keys(after || {})]))
+    .filter((key) => String(before?.[key] ?? '') !== String(after?.[key] ?? ''));
+  const subject = `progress for "${taskName || 'task'}"`;
+  if (changedKeys.length === 0) return `Updated ${subject}.`;
+  if (changedKeys.length === 1) return `Updated ${formatAuditFieldLabel(changedKeys[0]).toLowerCase()} for "${taskName || 'task'}".`;
+  return `Updated ${formatAuditList(changedKeys.map((key) => formatAuditFieldLabel(key).toLowerCase()))} for "${taskName || 'task'}".`;
+}
+
+function buildChangedAuditDetails(before: any, after: any, excludedKeys: string[] = []) {
+  if (!before && !after) return { before: null, after: null, changedKeys: [] as string[] };
+  if (!before) {
+    const afterDetails = Object.fromEntries(
+      Object.entries(after || {}).filter(([key, value]) => !excludedKeys.includes(key) && String(value ?? '') !== '')
+    );
+    return { before: null, after: afterDetails, changedKeys: Object.keys(afterDetails) };
+  }
+  if (!after) {
+    const beforeDetails = Object.fromEntries(
+      Object.entries(before || {}).filter(([key, value]) => !excludedKeys.includes(key) && String(value ?? '') !== '')
+    );
+    return { before: beforeDetails, after: null, changedKeys: Object.keys(beforeDetails) };
+  }
+
+  const changedKeys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+    .filter((key) => !excludedKeys.includes(key))
+    .filter((key) => String(before?.[key] ?? '') !== String(after?.[key] ?? ''));
+  const beforeDetails = Object.fromEntries(changedKeys.map((key) => [key, before?.[key] ?? '']));
+  const afterDetails = Object.fromEntries(changedKeys.map((key) => [key, after?.[key] ?? '']));
+  return { before: beforeDetails, after: afterDetails, changedKeys };
+}
 
 app.post('/api/specials', async (req, res) => {
   const { clientId, assignments } = req.body;
@@ -1953,6 +2427,20 @@ app.post('/api/specials', async (req, res) => {
         createdAt: new Date(),
         updatedAt: new Date(),
       });
+      const serviceName = await getServiceAuditName(db, String(task.serviceId).padStart(4, '0'));
+      await writeAuditLog(db, req, {
+        entityType: 'client',
+        entityId: String(clientId || ''),
+        action: 'client_special_added',
+        actionLabel: 'Added Special Project',
+        summary: `Added special project "${task.projectTitle || 'Untitled Project'}" for ${serviceName}.`,
+        details: {
+          clientID: String(clientId || ''),
+          specialID: specialId,
+          serviceID: String(task.serviceId).padStart(4, '0'),
+          assignedStaffID: String(task.assignedStaffId).padStart(4, '0')
+        }
+      });
       
       results.push({ specialId });
     }
@@ -1972,6 +2460,9 @@ app.put('/api/specials/:id', async (req, res) => {
   try {
     const db = await getMongoDb();
     const ids = userIdCandidates(id);
+    const existingSpecial = await db.collection<any>('specialEngagements').findOne({
+      $or: [{ _id: { $in: ids } }, { specialID: { $in: ids } }]
+    });
     const updates: any = { updatedAt: new Date() };
     if (data.assignedStaffId !== undefined) updates.assignedStaffID = String(data.assignedStaffId).padStart(4, '0');
     if (data.serviceId !== undefined) updates.serviceID = String(data.serviceId).padStart(4, '0');
@@ -1980,6 +2471,29 @@ app.put('/api/specials/:id', async (req, res) => {
     if (data.endDate !== undefined) updates.endDate = formatDateToMDY(data.endDate);
     if (data.status !== undefined) updates.status = data.status;
     if (data.description !== undefined) updates.description = data.description;
+    if (!existingSpecial) return res.status(404).json({ error: 'Special engagement not found' });
+    const specialBefore = {
+      projectTitle: existingSpecial?.projectTitle || '',
+      assignedStaffID: existingSpecial?.assignedStaffID || '',
+      serviceID: existingSpecial?.serviceID || '',
+      startDate: existingSpecial?.startDate || '',
+      endDate: existingSpecial?.endDate || '',
+      status: existingSpecial?.status || '',
+      description: existingSpecial?.description || ''
+    };
+    const specialAfter = {
+      projectTitle: updates.projectTitle ?? existingSpecial?.projectTitle ?? '',
+      assignedStaffID: updates.assignedStaffID ?? existingSpecial?.assignedStaffID ?? '',
+      serviceID: updates.serviceID ?? existingSpecial?.serviceID ?? '',
+      startDate: updates.startDate ?? existingSpecial?.startDate ?? '',
+      endDate: updates.endDate ?? existingSpecial?.endDate ?? '',
+      status: updates.status ?? existingSpecial?.status ?? '',
+      description: updates.description ?? existingSpecial?.description ?? ''
+    };
+    const specialDetails = buildChangedAuditDetails(specialBefore, specialAfter, ['specialID']);
+    if (specialDetails.changedKeys.length === 0) {
+      return res.status(200).json({ success: true, unchanged: true });
+    }
 
     const result = await db.collection<any>('specialEngagements').updateOne(
       { $or: [{ _id: { $in: ids } }, { specialID: { $in: ids } }] },
@@ -1987,6 +2501,26 @@ app.put('/api/specials/:id', async (req, res) => {
     );
 
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Special engagement not found' });
+    if (specialDetails.changedKeys.length > 0) {
+      const specialServiceName = await getServiceAuditName(db, specialAfter.serviceID);
+      await writeAuditLog(db, req, {
+        entityType: 'specialProject',
+        entityId: String(existingSpecial?.specialID || existingSpecial?._id || id),
+        relatedEntityType: 'client',
+        relatedEntityId: String(existingSpecial?.clientID || ''),
+        action: 'special_project_updated',
+        actionLabel: 'Updated Project',
+        summary: buildServiceAwareChangeSummary(specialBefore, specialAfter, `Updated project "${specialAfter.projectTitle || 'Untitled Project'}".`, specialServiceName),
+        details: {
+          clientID: String(existingSpecial?.clientID || ''),
+          specialID: String(existingSpecial?.specialID || existingSpecial?._id || id),
+          serviceID: String(specialAfter.serviceID || ''),
+          assignedStaffID: String(specialAfter.assignedStaffID || ''),
+          before: specialDetails.before,
+          after: specialDetails.after
+        }
+      });
+    }
 
     console.log('[API] Successfully updated special engagement:', id);
     return res.status(200).json({ success: true });
@@ -2008,6 +2542,9 @@ app.delete('/api/specials/:id', async (req, res) => {
     }
 
     const ids = userIdCandidates(id);
+    const existingSpecial = await db.collection<any>('specialEngagements').findOne({
+      $or: [{ _id: { $in: ids } }, { specialID: { $in: ids } }]
+    });
     const taskDocs = await db.collection<any>('taskLogs')
       .find({ specialID: { $in: ids } }, { projection: { taskID: 1 } })
       .toArray();
@@ -2022,12 +2559,69 @@ app.delete('/api/specials/:id', async (req, res) => {
     }
 
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Special engagement not found' });
+    const serviceName = await getServiceAuditName(db, existingSpecial?.serviceID || '');
+    await writeAuditLog(db, req, {
+      entityType: 'client',
+      entityId: String(existingSpecial?.clientID || ''),
+      action: 'client_special_deleted',
+      actionLabel: 'Deleted Special Project',
+      summary: `Deleted special project "${existingSpecial?.projectTitle || 'Untitled Project'}" for ${serviceName} and related worklogs.`,
+      details: {
+        clientID: String(existingSpecial?.clientID || ''),
+        specialID: String(existingSpecial?.specialID || existingSpecial?._id || id),
+        serviceID: existingSpecial?.serviceID || '',
+        assignedStaffID: existingSpecial?.assignedStaffID || ''
+      }
+    });
 
     console.log('[API] Successfully deleted special engagement:', id);
     return res.status(200).json({ success: true });
   } catch (error: any) {
     console.error('[API] Error deleting special engagement:', error);
     return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/audit-logs', async (req, res) => {
+  try {
+    const entityType = String(req.query.entityType || '').trim();
+    const entityId = String(req.query.entityId || '').trim();
+    const period = String(req.query.period || '').trim();
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '5'), 10) || 5, 1), 50);
+    const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
+    const skip = (page - 1) * limit;
+    if (!entityType || !entityId) return res.status(400).json({ error: 'entityType and entityId are required' });
+
+    const db = await getMongoDb();
+    const entityIds = userIdCandidates(entityId);
+    const query: any = {
+      $or: [
+        { entityType, entityId: { $in: entityIds } },
+        { relatedEntityType: entityType, relatedEntityId: { $in: entityIds } }
+      ]
+    };
+    if (period) query.period = period;
+
+    const collection = db.collection<any>('auditLogs');
+    const [logs, total] = await Promise.all([
+      collection
+      .find(query)
+      .sort({ createdAt: -1 })
+        .skip(skip)
+      .limit(limit)
+        .toArray(),
+      collection.countDocuments(query)
+    ]);
+
+    res.json({
+      logs: logs.map(mapMongoAuditLog),
+      total,
+      page,
+      totalPages: Math.max(Math.ceil(total / limit), 1)
+    });
+  } catch (error: any) {
+    console.error('API GET /api/audit-logs error:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 
@@ -2039,6 +2633,13 @@ app.post('/api/retainer-logs', async (req, res) => {
     const db = await getMongoDb();
     const deadlineID = String(deadline).padStart(4, '0');
     const id = `${deadlineID}-${String(period).replace(/[^\d]/g, '')}`;
+    const existingLog = await db.collection<any>('retainerLogs').findOne({ deadlineID, period });
+    const fullAuditBefore = existingLog ? { dateCompleted: existingLog.dateCompleted || '', remarks: existingLog.remarks || '' } : null;
+    const fullAuditAfter = { dateCompleted, remarks: remarks || '' };
+    const auditDetails = buildChangedAuditDetails(fullAuditBefore, fullAuditAfter);
+    if (existingLog && auditDetails.changedKeys.length === 0) {
+      return res.status(200).json({ success: true, unchanged: true });
+    }
 
     await db.collection<any>('retainerLogs').updateOne(
       { deadlineID, period },
@@ -2058,6 +2659,24 @@ app.post('/api/retainer-logs', async (req, res) => {
       { upsert: true }
     );
 
+    if (!existingLog || auditDetails.changedKeys.length > 0) {
+      const auditContext = await getDeadlineAuditContext(db, deadlineID);
+      await writeAuditLog(db, req, {
+        entityType: 'retainerFiling',
+        entityId: deadlineID,
+        period,
+        action: existingLog ? 'retainer_filing_updated' : 'retainer_filed',
+        actionLabel: existingLog ? 'Updated Filing' : 'Marked as Filed',
+        summary: buildRetainerFilingAuditSummary(fullAuditBefore, fullAuditAfter),
+        details: {
+          ...auditContext,
+          period,
+          before: auditDetails.before,
+          after: auditDetails.after
+        }
+      });
+    }
+
     console.log('[API] Successfully added retainer log for deadline:', deadline);
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -2073,6 +2692,14 @@ app.put('/api/retainer-logs', async (req, res) => {
   try {
     const db = await getMongoDb();
     const ids = userIdCandidates(deadline);
+    const existingLog = await db.collection<any>('retainerLogs').findOne({ deadlineID: { $in: ids }, period });
+    const fullAuditBefore = existingLog ? { dateCompleted: existingLog.dateCompleted || '', remarks: existingLog.remarks || '' } : null;
+    const fullAuditAfter = { dateCompleted, remarks: remarks || '' };
+    const auditDetails = buildChangedAuditDetails(fullAuditBefore, fullAuditAfter);
+    if (existingLog && auditDetails.changedKeys.length === 0) {
+      return res.status(200).json({ success: true, unchanged: true });
+    }
+
     const result = await db.collection<any>('retainerLogs').updateOne(
       { deadlineID: { $in: ids }, period },
       {
@@ -2087,6 +2714,25 @@ app.put('/api/retainer-logs', async (req, res) => {
     );
 
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Log entry not found' });
+
+    if (auditDetails.changedKeys.length > 0) {
+      const auditDeadlineID = String(deadline).padStart(4, '0');
+      const auditContext = await getDeadlineAuditContext(db, auditDeadlineID);
+      await writeAuditLog(db, req, {
+        entityType: 'retainerFiling',
+        entityId: auditDeadlineID,
+        period,
+        action: 'retainer_filing_updated',
+        actionLabel: 'Updated Filing',
+        summary: buildRetainerFilingAuditSummary(fullAuditBefore, fullAuditAfter),
+        details: {
+          ...auditContext,
+          period,
+          before: auditDetails.before,
+          after: auditDetails.after
+        }
+      });
+    }
 
     console.log('[API] Successfully updated retainer log for deadline:', deadline);
     return res.status(200).json({ success: true });
@@ -2106,12 +2752,35 @@ app.delete('/api/retainer-logs', async (req, res) => {
 
     const db = await getMongoDb();
     const ids = userIdCandidates(deadline);
+    const existingLog = await db.collection<any>('retainerLogs').findOne({
+      deadlineID: { $in: ids },
+      period
+    });
     const result = await db.collection<any>('retainerLogs').deleteOne({
       deadlineID: { $in: ids },
       period
     });
 
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Log entry not found' });
+
+    const auditBefore = existingLog ? { dateCompleted: existingLog.dateCompleted || '', remarks: existingLog.remarks || '' } : null;
+    const auditDetails = buildChangedAuditDetails(auditBefore, null);
+    const auditDeadlineID = String(deadline).padStart(4, '0');
+    const auditContext = await getDeadlineAuditContext(db, auditDeadlineID);
+    await writeAuditLog(db, req, {
+      entityType: 'retainerFiling',
+      entityId: auditDeadlineID,
+      period,
+      action: 'retainer_unfiled',
+      actionLabel: 'Unfiled Compliance',
+      summary: buildRetainerFilingAuditSummary(auditBefore, null),
+      details: {
+        ...auditContext,
+        period,
+        before: auditDetails.before,
+        after: auditDetails.after
+      }
+    });
 
     console.log('[API] Successfully deleted retainer log for deadline:', deadline, period);
     return res.status(200).json({ success: true });
@@ -2173,6 +2842,20 @@ app.post('/api/tasks', async (req, res) => {
       updatedAt: new Date()
     });
 
+    const specialContext = await getSpecialAuditContext(db, specialID);
+    await writeAuditLog(db, req, {
+      entityType: 'specialProject',
+      entityId: specialID,
+      action: 'special_task_added',
+      actionLabel: 'Added Task',
+      summary: `Added task "${taskName}".`,
+      details: {
+        ...specialContext,
+        taskID: id,
+        after: { taskID: id, taskName, status: status || 'Pending' }
+      }
+    });
+
     return res.status(200).json({ success: true, taskID: id });
   } catch (error: any) {
     if (error.code === 11000) return res.status(409).json({ error: 'Task ID already exists' });
@@ -2185,6 +2868,7 @@ app.put('/api/tasks/:id', async (req, res) => {
   const { taskName, status } = req.body;
   try {
     const db = await getMongoDb();
+    const existingTask = await db.collection<any>('taskLogs').findOne({ _id: id });
     const updates: any = { updatedAt: new Date() };
     if (taskName !== undefined) updates.taskName = taskName;
     if (status !== undefined) updates.status = status;
@@ -2195,6 +2879,30 @@ app.put('/api/tasks/:id', async (req, res) => {
     );
 
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Task not found' });
+
+    const taskBefore = existingTask ? { taskName: existingTask.taskName || '', status: existingTask.status || '' } : null;
+    const taskAfter = { taskName: taskName ?? existingTask?.taskName ?? '', status: status ?? existingTask?.status ?? '' };
+    const taskDetails = buildChangedAuditDetails(taskBefore, taskAfter);
+    if (taskDetails.changedKeys.length > 0) {
+      const specialContext = await getSpecialAuditContext(db, existingTask?.specialID || '');
+      await writeAuditLog(db, req, {
+        entityType: 'specialProject',
+        entityId: existingTask?.specialID || '',
+        action: 'special_task_updated',
+        actionLabel: 'Updated Task',
+        summary: buildFieldChangeSummary(
+          taskBefore,
+          taskAfter,
+          `Updated task "${updates.taskName || existingTask?.taskName || id}".`
+        ),
+        details: {
+          ...specialContext,
+          taskID: String(existingTask?.taskID || existingTask?._id || id),
+          before: taskDetails.before,
+          after: taskDetails.after
+        }
+      });
+    }
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -2213,10 +2921,26 @@ app.delete('/api/tasks/:id', async (req, res) => {
     }
 
     const ids = userIdCandidates(id);
+    const task = await db.collection<any>('taskLogs').findOne({ $or: [{ _id: { $in: ids } }, { taskID: { $in: ids } }] });
+    const activityCount = await db.collection<any>('activityLogs').countDocuments({ taskID: { $in: ids } });
     const taskResult = await db.collection<any>('taskLogs').deleteOne({ $or: [{ _id: { $in: ids } }, { taskID: { $in: ids } }] });
     await db.collection<any>('activityLogs').deleteMany({ taskID: { $in: ids } });
 
     if (taskResult.deletedCount === 0) return res.status(404).json({ error: 'Task not found' });
+
+    await writeAuditLog(db, req, {
+      entityType: 'specialProject',
+      entityId: task?.specialID || '',
+      action: 'special_task_deleted',
+      actionLabel: 'Deleted Task',
+      summary: `Deleted task "${task?.taskName || id}"${activityCount ? ` and ${activityCount} progress log${activityCount === 1 ? '' : 's'}` : ''}.`,
+      details: {
+        ...(await getSpecialAuditContext(db, task?.specialID || '')),
+        taskID: String(task?.taskID || task?._id || id),
+        before: task ? { taskID: task.taskID || id, taskName: task.taskName || '', status: task.status || '', activityCount } : null,
+        after: null
+      }
+    });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -2249,6 +2973,22 @@ app.post('/api/activities', async (req, res) => {
       updatedAt: new Date()
     });
 
+    const task = await db.collection<any>('taskLogs').findOne({ $or: [{ _id: taskID }, { taskID }] });
+    await writeAuditLog(db, req, {
+      entityType: 'specialProject',
+      entityId: task?.specialID || '',
+      action: 'special_progress_added',
+      actionLabel: 'Added Progress',
+      summary: `Added progress for "${task?.taskName || 'task'}".`,
+      details: {
+        ...(await getSpecialAuditContext(db, task?.specialID || '')),
+        activityID: id,
+        taskID,
+        taskName: task?.taskName || '',
+        after: { dateCompleted, description }
+      }
+    });
+
     return res.status(200).json({ success: true, activityID: id });
   } catch (error: any) {
     if (error.code === 11000) return res.status(409).json({ error: 'Activity ID already exists' });
@@ -2261,6 +3001,10 @@ app.put('/api/activities/:id', async (req, res) => {
   const { description, dateCompleted } = req.body;
   try {
     const db = await getMongoDb();
+    const existingActivity = await db.collection<any>('activityLogs').findOne({ _id: id });
+    const task = existingActivity
+      ? await db.collection<any>('taskLogs').findOne({ $or: [{ _id: existingActivity.taskID }, { taskID: existingActivity.taskID }] })
+      : null;
     const updates: any = { updatedAt: new Date() };
     if (dateCompleted !== undefined) updates.dateCompleted = dateCompleted;
     if (description !== undefined) updates.description = description;
@@ -2271,6 +3015,27 @@ app.put('/api/activities/:id', async (req, res) => {
     );
 
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Activity not found' });
+
+    const activityBefore = existingActivity ? { dateCompleted: existingActivity.dateCompleted || '', description: existingActivity.description || '' } : null;
+    const activityAfter = { dateCompleted: dateCompleted ?? existingActivity?.dateCompleted ?? '', description: description ?? existingActivity?.description ?? '' };
+    const activityDetails = buildChangedAuditDetails(activityBefore, activityAfter);
+    if (activityDetails.changedKeys.length > 0) {
+      await writeAuditLog(db, req, {
+      entityType: 'specialProject',
+      entityId: task?.specialID || '',
+      action: 'special_progress_updated',
+      actionLabel: 'Updated Progress',
+      summary: buildProgressChangeSummary(activityBefore, activityAfter, task?.taskName || 'task'),
+      details: {
+        ...(await getSpecialAuditContext(db, task?.specialID || '')),
+        activityID: String(existingActivity?.activityID || existingActivity?._id || id),
+        taskID: existingActivity?.taskID || '',
+          taskName: task?.taskName || '',
+          before: activityDetails.before,
+          after: activityDetails.after
+        }
+      });
+    }
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -2289,8 +3054,28 @@ app.delete('/api/activities/:id', async (req, res) => {
     }
 
     const ids = userIdCandidates(id);
+    const existingActivity = await db.collection<any>('activityLogs').findOne({ $or: [{ _id: { $in: ids } }, { activityID: { $in: ids } }] });
+    const task = existingActivity
+      ? await db.collection<any>('taskLogs').findOne({ $or: [{ _id: existingActivity.taskID }, { taskID: existingActivity.taskID }] })
+      : null;
     const result = await db.collection<any>('activityLogs').deleteOne({ $or: [{ _id: { $in: ids } }, { activityID: { $in: ids } }] });
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Activity not found' });
+
+    await writeAuditLog(db, req, {
+      entityType: 'specialProject',
+      entityId: task?.specialID || '',
+      action: 'special_progress_deleted',
+      actionLabel: 'Deleted Progress',
+      summary: `Deleted progress for "${task?.taskName || 'task'}".`,
+      details: {
+        ...(await getSpecialAuditContext(db, task?.specialID || '')),
+        activityID: String(existingActivity?.activityID || existingActivity?._id || id),
+        taskID: String(existingActivity?.taskID || ''),
+        taskName: task?.taskName || '',
+        before: existingActivity ? { dateCompleted: existingActivity.dateCompleted || '', description: existingActivity.description || '' } : null,
+        after: null
+      }
+    });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -2319,6 +3104,14 @@ app.post('/api/credentials', async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date()
     });
+    await writeAuditLog(db, req, {
+      entityType: 'client',
+      entityId: String(clientID || ''),
+      action: 'client_credential_added',
+      actionLabel: 'Added Credential',
+      summary: `Added credential "${systemName || 'Untitled Credential'}".`,
+      details: { clientID: String(clientID || ''), credentialID }
+    });
     return res.status(200).json({ success: true, credentialID });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -2331,12 +3124,33 @@ app.put('/api/credentials/:id', async (req, res) => {
   try {
     const db = await getMongoDb();
     const ids = userIdCandidates(id);
+    const existingCredential = await db.collection<any>('credentials').findOne({
+      $or: [{ _id: { $in: ids } }, { credentialID: { $in: ids } }]
+    });
     const updates: any = { updatedAt: new Date() };
     if (systemName !== undefined) updates.systemName = systemName;
     if (username !== undefined) updates.username = username;
     if (password !== undefined) updates.password = password;
     if (securityAnswer !== undefined) updates.securityAnswer = securityAnswer;
     if (remarks !== undefined) updates.remarks = remarks;
+    const credentialBefore = {
+      systemName: existingCredential?.systemName || '',
+      username: existingCredential?.username || '',
+      password: existingCredential?.password || '',
+      securityAnswer: existingCredential?.securityAnswer || '',
+      remarks: existingCredential?.remarks || ''
+    };
+    const credentialAfter = {
+      systemName: systemName ?? existingCredential?.systemName ?? '',
+      username: username ?? existingCredential?.username ?? '',
+      password: password ?? existingCredential?.password ?? '',
+      securityAnswer: securityAnswer ?? existingCredential?.securityAnswer ?? '',
+      remarks: remarks ?? existingCredential?.remarks ?? ''
+    };
+    const credentialDetails = buildChangedAuditDetails(credentialBefore, credentialAfter);
+    if (existingCredential && credentialDetails.changedKeys.length === 0) {
+      return res.status(200).json({ success: true, unchanged: true });
+    }
 
     const result = await db.collection<any>('credentials').updateOne(
       { $or: [{ _id: { $in: ids } }, { credentialID: { $in: ids } }] },
@@ -2344,6 +3158,19 @@ app.put('/api/credentials/:id', async (req, res) => {
     );
 
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Credential not found' });
+    await writeAuditLog(db, req, {
+      entityType: 'client',
+      entityId: String(existingCredential?.clientID || ''),
+      action: 'client_credential_updated',
+      actionLabel: 'Updated Credential',
+      summary: buildFieldChangeSummary(credentialBefore, credentialAfter, `Updated credential "${systemName || existingCredential?.systemName || 'Untitled Credential'}".`),
+      details: {
+        clientID: String(existingCredential?.clientID || ''),
+        credentialID: String(existingCredential?.credentialID || existingCredential?._id || id),
+        before: credentialDetails.before,
+        after: credentialDetails.after
+      }
+    });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -2361,8 +3188,22 @@ app.delete('/api/credentials/:id', async (req, res) => {
     }
 
     const ids = userIdCandidates(id);
+    const existingCredential = await db.collection<any>('credentials').findOne({
+      $or: [{ _id: { $in: ids } }, { credentialID: { $in: ids } }]
+    });
     const result = await db.collection<any>('credentials').deleteOne({ $or: [{ _id: { $in: ids } }, { credentialID: { $in: ids } }] });
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Credential not found' });
+    await writeAuditLog(db, req, {
+      entityType: 'client',
+      entityId: String(existingCredential?.clientID || ''),
+      action: 'client_credential_deleted',
+      actionLabel: 'Deleted Credential',
+      summary: `Deleted credential "${existingCredential?.systemName || 'Untitled Credential'}".`,
+      details: {
+        clientID: String(existingCredential?.clientID || ''),
+        credentialID: String(existingCredential?.credentialID || existingCredential?._id || id)
+      }
+    });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -2375,13 +3216,26 @@ app.delete('/api/transmittals/:id', async (req, res) => {
   try {
     const db = await getMongoDb();
     const requestUser = await getRequestUser(req);
-    const transmittal = await db.collection<any>('transmittals').findOne({ _id: id }, { projection: { userID: 1 } });
+    const transmittal = await db.collection<any>('transmittals').findOne({ _id: id });
     if (!canDeleteTransmittalRecord(requestUser, transmittal)) {
       return res.status(403).json({ error: 'You do not have permission to delete this transmittal' });
     }
 
     const result = await db.collection<any>('transmittals').deleteOne({ _id: id });
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Transmittal not found' });
+    await writeAuditLog(db, req, {
+      entityType: 'transmittal',
+      entityId: String(transmittal?.transmittalID || transmittal?._id || id),
+      action: 'transmittal_deleted',
+      actionLabel: 'Deleted Transmittal',
+      summary: `Deleted transmittal #${transmittal?.transmittalID || id}.`,
+      details: {
+        transmittalID: String(transmittal?.transmittalID || transmittal?._id || id),
+        clientID: transmittal?.clientID || '',
+        userID: transmittal?.userID || '',
+        itemCount: String(transmittal?.items || '').split('||').filter(Boolean).length
+      }
+    });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
@@ -2398,8 +3252,21 @@ app.delete('/api/meetings/:id', async (req, res) => {
       return res.status(403).json({ error: 'Only Admin, Manager, Supervisor, or Senior can delete meetings' });
     }
 
+    const meeting = await db.collection<any>('meetings').findOne({ _id: id });
     const result = await db.collection<any>('meetings').deleteOne({ _id: id });
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Meeting not found' });
+    await writeAuditLog(db, req, {
+      entityType: 'meeting',
+      entityId: String(meeting?.meetingID || meeting?._id || id),
+      action: 'meeting_deleted',
+      actionLabel: 'Deleted Meeting',
+      summary: `Deleted meeting "${meeting?.subject || id}".`,
+      details: {
+        meetingID: String(meeting?.meetingID || meeting?._id || id),
+        date: meeting?.date || '',
+        attendeeCount: String(meeting?.userIDs || '').split(',').filter(Boolean).length
+      }
+    });
 
     return res.status(200).json({ success: true });
   } catch (error: any) {
