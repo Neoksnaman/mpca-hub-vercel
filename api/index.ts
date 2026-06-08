@@ -211,6 +211,14 @@ function mapMongoChatMessage(message: any) {
     senderUserID: message?.senderUserID || '',
     message: message?.message || '',
     readBy: Array.isArray(message?.readBy) ? message.readBy.map(String) : [],
+    mentions: Array.isArray(message?.mentions)
+      ? message.mentions
+          .filter((mention: any) => mention?.type === 'all' || (mention?.type === 'user' && mention?.userID))
+          .map((mention: any) => mention?.type === 'all'
+            ? { type: 'all', label: mention?.label || 'All' }
+            : { type: 'user', userID: String(mention.userID), name: String(mention.name || '') }
+          )
+      : [],
     reactions: Array.isArray(message?.reactions)
       ? message.reactions
           .filter((reaction: any) => reaction?.userId && reaction?.reaction)
@@ -1397,12 +1405,38 @@ app.post('/api/chat/messages', async (req, res) => {
       await db.collection<any>('chatThreads').insertOne(thread);
     }
 
+    const mentionText = message.toLowerCase();
+    const mentions = Array.isArray(req.body?.mentions)
+      ? req.body.mentions
+          .map((mention: any) => {
+            const type = String(mention?.type || '').trim();
+            if (type === 'all') {
+              return threadType === 'group' && mentionText.includes('@all')
+                ? { type: 'all', label: 'All' }
+                : null;
+            }
+            if (type === 'user') {
+              const userID = String(mention?.userID || '').trim();
+              const name = String(mention?.name || '').trim();
+              if (!userID || !participants.includes(userID) || !name) return null;
+              return mentionText.includes(`@${name.toLowerCase()}`) ? { type: 'user', userID, name } : null;
+            }
+            return null;
+          })
+          .filter(Boolean)
+          .filter((mention: any, index: number, list: any[]) => {
+            const key = mention.type === 'all' ? 'all' : `user:${mention.userID}`;
+            return list.findIndex((item: any) => (item.type === 'all' ? 'all' : `user:${item.userID}`) === key) === index;
+          })
+      : [];
+
     const messageId = crypto.randomUUID();
     const messageDoc = {
       _id: messageId,
       threadId: thread._id,
       senderUserID,
       message,
+      mentions,
       readBy: [senderUserID],
       reactions: [],
       createdAt: now,

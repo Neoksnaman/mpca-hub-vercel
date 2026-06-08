@@ -175,12 +175,24 @@ export interface ChatThread {
   updatedAt: string;
 }
 
+export type ChatMention =
+  | {
+      type: 'all';
+      label: string;
+    }
+  | {
+      type: 'user';
+      userID: string;
+      name: string;
+    };
+
 export interface ChatMessage {
   id: string;
   threadId: string;
   senderUserID: string;
   message: string;
   readBy: string[];
+  mentions?: ChatMention[];
   reactions?: {
     userId: string;
     reaction: string;

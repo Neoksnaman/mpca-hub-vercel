@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronLeft, MessageCircle, Plus, Search, Send, Settings, SmilePlus, X } from 'lucide-react';
 import * as Ably from 'ably';
-import { ChatMessage, ChatThread, User } from '../types';
+import { ChatMention, ChatMessage, ChatThread, User } from '../types';
 import { fetchChatMessages, fetchChatThreads, markChatThreadRead, sendChatMessage, toggleChatReaction, updateChatThreadSettings } from '../services/googleSheetsService';
 
 interface ChatMessagesProps {
@@ -24,6 +24,10 @@ const CHAT_POLLING_FALLBACK_ENABLED = true;
 const CHAT_POLLING_FALLBACK_INTERVAL_MS = 5 * 60 * 1000;
 const CHAT_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
+type MentionOption =
+  | { type: 'all'; label: string }
+  | { type: 'user'; userID: string; label: string; user: User };
+
 const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, pollingPaused = false, onlineUserIDs = new Set(), ablyRealtime = null }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -40,6 +44,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
   const [settingsMembers, setSettingsMembers] = useState<string[]>([]);
   const [settingsAdmins, setSettingsAdmins] = useState<string[]>([]);
   const [draft, setDraft] = useState('');
+  const [selectedMentions, setSelectedMentions] = useState<ChatMention[]>([]);
+  const [mentionState, setMentionState] = useState<{ start: number; query: string } | null>(null);
   const [search, setSearch] = useState('');
   const [loadingThreads, setLoadingThreads] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -52,6 +58,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
   const dropdownRef = useRef<HTMLDivElement>(null);
   const reactionPickerRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
+  const draftInputRef = useRef<HTMLTextAreaElement>(null);
   const scrollToLatestPendingRef = useRef(false);
   const activeThreadRef = useRef<ChatThread | null>(null);
   const chatOpenRef = useRef(false);
@@ -99,6 +106,80 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
     if (!query) return activeUsers;
     return activeUsers.filter(user => fullName(user).toLowerCase().includes(query));
   }, [activeUsers, search]);
+
+  const mentionParticipantIds = useMemo(() => {
+    if (activeThread?.type === 'group') {
+      return activeThread.participantUserIDs.filter(id => String(id) !== String(currentUser.id));
+    }
+    if (composeMode && composeType === 'group') {
+      return selectedRecipients;
+    }
+    return [];
+  }, [activeThread, composeMode, composeType, currentUser.id, selectedRecipients]);
+
+  const mentionOptions = useMemo<MentionOption[]>(() => {
+    if (!mentionState || mentionParticipantIds.length === 0) return [];
+    const query = mentionState.query.trim().toLowerCase();
+    const options: MentionOption[] = [
+      { type: 'all', label: 'All' },
+      ...mentionParticipantIds
+        .map(id => userById.get(String(id)))
+        .filter((user): user is User => !!user)
+        .sort((a, b) => fullName(a).localeCompare(fullName(b)))
+        .map(user => ({ type: 'user' as const, userID: String(user.id), label: fullName(user), user }))
+    ];
+    return options.filter(option => option.label.toLowerCase().includes(query)).slice(0, 8);
+  }, [mentionParticipantIds, mentionState, userById]);
+
+  const syncMentionState = useCallback((value: string, cursor: number | null | undefined) => {
+    const position = typeof cursor === 'number' ? cursor : value.length;
+    const prefix = value.slice(0, position);
+    const atIndex = prefix.lastIndexOf('@');
+    if (atIndex === -1 || mentionParticipantIds.length === 0) {
+      setMentionState(null);
+      return;
+    }
+
+    const query = prefix.slice(atIndex + 1);
+    const charBeforeAt = atIndex > 0 ? prefix.charAt(atIndex - 1) : ' ';
+    if (!/\s/.test(charBeforeAt) || /[\s@]/.test(query)) {
+      setMentionState(null);
+      return;
+    }
+
+    setMentionState({ start: atIndex, query });
+  }, [mentionParticipantIds.length]);
+
+  const insertMention = useCallback((option: MentionOption) => {
+    if (!mentionState) return;
+    const mentionText = `@${option.label}`;
+    const cursor = draftInputRef.current?.selectionStart ?? draft.length;
+    const nextDraft = `${draft.slice(0, mentionState.start)}${mentionText} ${draft.slice(cursor)}`;
+    const nextCursor = mentionState.start + mentionText.length + 1;
+
+    setDraft(nextDraft);
+    setMentionState(null);
+    setSelectedMentions(prev => {
+      const nextMention: ChatMention = option.type === 'all'
+        ? { type: 'all', label: 'All' }
+        : { type: 'user', userID: option.userID, name: option.label };
+      const key = nextMention.type === 'all' ? 'all' : `user:${nextMention.userID}`;
+      const withoutDuplicate = prev.filter(item => (item.type === 'all' ? 'all' : `user:${item.userID}`) !== key);
+      return [...withoutDuplicate, nextMention];
+    });
+
+    window.requestAnimationFrame(() => {
+      draftInputRef.current?.focus();
+      draftInputRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  }, [draft, mentionState]);
+
+  const getCurrentMentionsForSend = useCallback((text: string) => (
+    selectedMentions.filter(mention => {
+      if (mention.type === 'all') return text.toLowerCase().includes('@all');
+      return text.toLowerCase().includes(`@${mention.name.toLowerCase()}`);
+    })
+  ), [selectedMentions]);
 
   const unreadCount = useMemo(() => threads.reduce((total, thread) => total + (thread.unreadCount || 0), 0), [threads]);
 
@@ -195,6 +276,43 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
     }
     return thread.lastMessage;
   }, [currentUser.id, userById]);
+
+  const renderMessageText = useCallback((message: ChatMessage, mine: boolean) => {
+    const text = message.message || '';
+    const mentions = message.mentions || [];
+    if (mentions.length === 0) return text;
+
+    const ranges: { start: number; end: number; label: string }[] = [];
+    mentions.forEach(mention => {
+      const label = mention.type === 'all' ? 'All' : mention.name;
+      const token = `@${label}`;
+      let searchFrom = 0;
+      while (searchFrom < text.length) {
+        const index = text.toLowerCase().indexOf(token.toLowerCase(), searchFrom);
+        if (index === -1) break;
+        const overlaps = ranges.some(range => index < range.end && index + token.length > range.start);
+        if (!overlaps) ranges.push({ start: index, end: index + token.length, label: token });
+        searchFrom = index + token.length;
+      }
+    });
+
+    if (ranges.length === 0) return text;
+    ranges.sort((a, b) => a.start - b.start);
+
+    const nodes: React.ReactNode[] = [];
+    let cursor = 0;
+    ranges.forEach((range, index) => {
+      if (range.start > cursor) nodes.push(text.slice(cursor, range.start));
+      nodes.push(
+        <span key={`${range.label}-${index}`} className={`font-black ${mine ? 'text-blue-100' : 'text-[#1a73e8]'}`}>
+          {text.slice(range.start, range.end)}
+        </span>
+      );
+      cursor = range.end;
+    });
+    if (cursor < text.length) nodes.push(text.slice(cursor));
+    return nodes;
+  }, []);
 
   const loadThreads = useCallback(async (silent = false) => {
     if (pollingPaused) return;
@@ -376,6 +494,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
     setChatOpen(true);
     setActiveThread(thread);
     setMessages([]);
+    setDraft('');
+    setSelectedMentions([]);
+    setMentionState(null);
     setHasOlder(true);
     setLoadingMessages(true);
     try {
@@ -403,6 +524,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
     setSelectedRecipients([]);
     setGroupTitle('');
     setDraft('');
+    setSelectedMentions([]);
+    setMentionState(null);
     setSearch('');
     setHasOlder(false);
   };
@@ -527,12 +650,16 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
     if (recipientIds.length === 0) return;
     if (!activeThread && composeType === 'group' && recipientIds.length < 2) return;
 
+    const mentions = getCurrentMentionsForSend(text);
     setDraft('');
+    setSelectedMentions([]);
+    setMentionState(null);
     const result = await sendChatMessage({
       threadId: activeThread?.id,
       senderUserID: currentUser.id,
       recipientUserIDs: recipientIds,
       message: text,
+      mentions,
       type: activeThread?.type || composeType,
       threadTitle: activeThread?.threadTitle || threadTitle,
     });
@@ -860,7 +987,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                         </div>
                         <div className={`rounded-2xl px-4 py-2 shadow-sm ${reactionSummary.length > 0 ? 'pb-4' : ''} ${mine ? 'bg-primary text-white rounded-br-md' : 'bg-white dark:bg-gray-800 text-neutral-dark dark:text-white border border-neutral-medium/70 dark:border-gray-700 rounded-bl-md'}`}>
                           {!mine && <p className="text-[9px] font-black text-secondary mb-1">{fullName(userById.get(String(message.senderUserID)))}</p>}
-                          <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap">{message.message}</p>
+                          <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap">{renderMessageText(message, mine)}</p>
                           <p className={`text-[9px] font-bold mt-1 ${mine ? 'text-right text-white/70' : 'text-secondary/60'}`}>{formatTime(message.createdAt)}</p>
                         </div>
                         {reactionSummary.length > 0 && (
@@ -911,12 +1038,51 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
             )}
           </div>
 
-          <div className="p-4 border-t border-neutral-medium/60 dark:border-gray-700/60 bg-white dark:bg-gray-800">
+          <div className="relative p-4 border-t border-neutral-medium/60 dark:border-gray-700/60 bg-white dark:bg-gray-800">
+            {mentionState && mentionOptions.length > 0 && (
+              <div className="absolute bottom-[4.8rem] left-4 right-16 z-30 max-h-44 overflow-y-auto rounded-2xl border border-neutral-medium bg-white p-1 shadow-xl dark:border-gray-700 dark:bg-gray-800">
+                {mentionOptions.map(option => (
+                  <button
+                    key={option.type === 'all' ? 'all' : option.userID}
+                    type="button"
+                    onClick={() => insertMention(option)}
+                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-bold text-neutral-dark transition-colors hover:bg-primary/10 hover:text-primary dark:text-white"
+                  >
+                    {option.type === 'all' ? (
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-[10px] font-black text-primary">@</span>
+                    ) : (
+                      renderChatAvatar(option.user, option.label, 'w-7 h-7', 'text-[9px]')
+                    )}
+                    <span>{option.type === 'all' ? '@All' : option.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex items-end gap-2">
               <textarea
+                ref={draftInputRef}
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  syncMentionState(e.target.value, e.target.selectionStart);
+                }}
+                onClick={(e) => syncMentionState(draft, e.currentTarget.selectionStart)}
+                onKeyUp={(e) => {
+                  if (!['Enter', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+                    syncMentionState(draft, e.currentTarget.selectionStart);
+                  }
+                }}
                 onKeyDown={(e) => {
+                  if (mentionState && mentionOptions.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
+                    e.preventDefault();
+                    insertMention(mentionOptions[0]);
+                    return;
+                  }
+                  if (e.key === 'Escape' && mentionState) {
+                    e.preventDefault();
+                    setMentionState(null);
+                    return;
+                  }
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     handleSend();

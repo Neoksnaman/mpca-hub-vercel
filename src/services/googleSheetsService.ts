@@ -1,5 +1,5 @@
 
-import { User, AppData, RetainerEngagement, SpecialEngagement, TaxCompliance, Client, UserRole, ClientCredential, Service, Transmittal, Meeting, Notification, DeliverableLog, ChatThread, ChatMessage } from '../types';
+import { User, AppData, RetainerEngagement, SpecialEngagement, TaxCompliance, Client, UserRole, ClientCredential, Service, Transmittal, Meeting, Notification, DeliverableLog, ChatThread, ChatMessage, ChatMention } from '../types';
 
 
 // --- Shared Utilities ---
@@ -223,7 +223,7 @@ export const fetchChatMessages = (threadId: string, userId: string, limit = 10, 
     return apiCall<ChatMessage[]>(`/api/chat/messages?${params.toString()}`);
 };
 
-export const sendChatMessage = (data: { threadId?: string; senderUserID: string; recipientUserIDs: string[]; message: string; type?: 'direct' | 'group'; threadTitle?: string }) =>
+export const sendChatMessage = (data: { threadId?: string; senderUserID: string; recipientUserIDs: string[]; message: string; type?: 'direct' | 'group'; threadTitle?: string; mentions?: ChatMention[] }) =>
     apiCall<{ success: boolean; threadId: string; message: ChatMessage }>('/api/chat/messages', {
         method: 'POST',
         body: JSON.stringify(data)
