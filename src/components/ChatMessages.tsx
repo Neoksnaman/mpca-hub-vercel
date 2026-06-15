@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronLeft, MessageCircle, Plus, Search, Send, Settings, SmilePlus, X } from 'lucide-react';
+import { Check, ChevronLeft, MessageCircle, Plus, Search, Send, Settings, Smile, Sticker, X } from 'lucide-react';
 import * as Ably from 'ably';
 import { ChatMention, ChatMessage, ChatThread, User } from '../types';
 import { fetchChatMessages, fetchChatThreads, markChatThreadRead, sendChatMessage, toggleChatReaction, updateChatThreadSettings } from '../services/googleSheetsService';
@@ -28,6 +28,35 @@ type MentionOption =
   | { type: 'all'; label: string }
   | { type: 'user'; userID: string; label: string; user: User };
 
+type StickerOption = {
+  id: string;
+  label: string;
+  emoji: string;
+};
+
+const CHAT_STICKERS: StickerOption[] = [
+  { id: 'noted', label: 'Noted', emoji: '\u2705' },
+  { id: 'thanks', label: 'Thank you', emoji: '\u{1F64F}' },
+  { id: 'approved', label: 'Approved', emoji: '\u{1F44D}' },
+  { id: 'done', label: 'Done', emoji: '\u{1F3C1}' },
+  { id: 'reviewing', label: 'Reviewing', emoji: '\u{1F50E}' },
+  { id: 'please-check', label: 'Please check', emoji: '\u{1F4CC}' },
+  { id: 'urgent', label: 'Urgent', emoji: '\u26A0\uFE0F' },
+  { id: 'deadline', label: 'Deadline', emoji: '\u{1F4C5}' },
+  { id: 'uploaded', label: 'Uploaded', emoji: '\u{1F4E4}' },
+  { id: 'received', label: 'Received', emoji: '\u{1F4E5}' },
+  { id: 'sent', label: 'Sent', emoji: '\u2709\uFE0F' },
+  { id: 'call-me', label: 'Call me', emoji: '\u260E\uFE0F' },
+  { id: 'meeting', label: 'Meeting', emoji: '\u{1F4CB}' },
+  { id: 'on-it', label: 'On it', emoji: '\u{1F4AA}' },
+  { id: 'great-work', label: 'Great work', emoji: '\u2B50' },
+  { id: 'question', label: 'Question', emoji: '\u2753' },
+  { id: 'waiting', label: 'Waiting', emoji: '\u23F3' },
+  { id: 'for-filing', label: 'For filing', emoji: '\u{1F5C2}\uFE0F' },
+  { id: 'coffee-break', label: 'Coffee break', emoji: '\u2615' },
+  { id: 'good-morning', label: 'Good morning', emoji: '\u2600\uFE0F' },
+];
+
 const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, pollingPaused = false, onlineUserIDs = new Set(), ablyRealtime = null }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -55,10 +84,15 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
   const [reactionPickerDirection, setReactionPickerDirection] = useState<'top' | 'bottom'>('top');
   const [reactionPickerHorizontal, setReactionPickerHorizontal] = useState<'left' | 'right'>('right');
   const [savingReactionId, setSavingReactionId] = useState<string | null>(null);
+  const [messageToolsOpen, setMessageToolsOpen] = useState(false);
+  const [messageToolsTab, setMessageToolsTab] = useState<'emoji' | 'stickers'>('emoji');
   const dropdownRef = useRef<HTMLDivElement>(null);
   const reactionPickerRef = useRef<HTMLDivElement>(null);
+  const messageToolsRef = useRef<HTMLDivElement>(null);
+  const emojiPickerMountRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const draftInputRef = useRef<HTMLTextAreaElement>(null);
+  const draftRef = useRef('');
   const scrollToLatestPendingRef = useRef(false);
   const activeThreadRef = useRef<ChatThread | null>(null);
   const chatOpenRef = useRef(false);
@@ -82,6 +116,78 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
   useEffect(() => {
     loadingOlderRef.current = loadingOlder;
   }, [loadingOlder]);
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  const insertTextAtCursor = useCallback((text: string) => {
+    const input = draftInputRef.current;
+    const currentDraft = draftRef.current;
+    const start = input?.selectionStart ?? currentDraft.length;
+    const end = input?.selectionEnd ?? currentDraft.length;
+    const nextDraft = `${currentDraft.slice(0, start)}${text}${currentDraft.slice(end)}`;
+    const nextCursor = start + text.length;
+    setDraft(nextDraft);
+    draftRef.current = nextDraft;
+    setMentionState(null);
+    window.requestAnimationFrame(() => {
+      draftInputRef.current?.focus();
+      draftInputRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  }, []);
+
+  const resizeDraftInput = useCallback((element = draftInputRef.current) => {
+    if (!element) return;
+    const minHeight = 44;
+    const maxHeight = 116;
+    element.style.height = `${minHeight}px`;
+    const nextHeight = Math.min(Math.max(element.scrollHeight, minHeight), maxHeight);
+    element.style.height = `${nextHeight}px`;
+    element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, []);
+
+  useEffect(() => {
+    resizeDraftInput();
+  }, [draft, resizeDraftInput]);
+
+  useEffect(() => {
+    if (!messageToolsOpen || messageToolsTab !== 'emoji' || !emojiPickerMountRef.current) return;
+    let disposed = false;
+    let pickerNode: Node | null = null;
+    emojiPickerMountRef.current.innerHTML = '<div class="p-4 text-center text-xs font-bold text-secondary">Loading emoji...</div>';
+
+    Promise.all([
+      import('@emoji-mart/data'),
+      import('emoji-mart')
+    ]).then(([dataModule, emojiMart]) => {
+      if (disposed || !emojiPickerMountRef.current) return;
+      emojiPickerMountRef.current.innerHTML = '';
+      const PickerClass = emojiMart.Picker as any;
+      const picker = new PickerClass({
+        data: dataModule.default,
+        theme: 'auto',
+        set: 'native',
+        perLine: 6,
+        emojiSize: 20,
+        emojiButtonSize: 30,
+        previewPosition: 'none',
+        skinTonePosition: 'none',
+        maxFrequentRows: 2,
+        onEmojiSelect: (emoji: any) => {
+          const nativeEmoji = emoji?.native || '';
+          if (nativeEmoji) insertTextAtCursor(nativeEmoji);
+        },
+      });
+      pickerNode = picker as Node;
+      emojiPickerMountRef.current.appendChild(pickerNode);
+    });
+
+    return () => {
+      disposed = true;
+      pickerNode?.parentNode?.removeChild(pickerNode);
+    };
+  }, [messageToolsOpen, messageToolsTab, insertTextAtCursor]);
 
   const userById = useMemo(() => {
     const lookup = new Map<string, User>();
@@ -481,6 +587,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
       if (reactionPickerRef.current && !reactionPickerRef.current.contains(event.target as Node)) {
         setReactionPickerMessageId(null);
       }
+      if (messageToolsRef.current && !messageToolsRef.current.contains(event.target as Node)) {
+        setMessageToolsOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -660,6 +769,41 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
       recipientUserIDs: recipientIds,
       message: text,
       mentions,
+      type: activeThread?.type || composeType,
+      threadTitle: activeThread?.threadTitle || threadTitle,
+    });
+    const threadId = activeThread?.id || result.threadId;
+    scrollToLatestPendingRef.current = true;
+    setMessages(prev => [...prev, result.message]);
+    const latestThreads = await fetchChatThreads(currentUser.id);
+    setThreads(latestThreads);
+    const nextThread = latestThreads.find(thread => thread.id === threadId);
+    if (nextThread) {
+      setActiveThread(nextThread);
+      setComposeMode(false);
+    }
+  };
+
+  const handleSendSticker = async (sticker: StickerOption) => {
+    if (pollingPaused) return;
+    const recipientIds = activeThread
+      ? activeThread.participantUserIDs.filter(id => String(id) !== String(currentUser.id))
+      : composeType === 'group' ? selectedRecipients : selectedRecipient ? [selectedRecipient] : [];
+    const threadTitle = groupTitle.trim();
+    if (recipientIds.length === 0) return;
+    if (!activeThread && composeType === 'group' && recipientIds.length < 2) return;
+
+    setMessageToolsOpen(false);
+    setMentionState(null);
+    const result = await sendChatMessage({
+      threadId: activeThread?.id,
+      senderUserID: currentUser.id,
+      recipientUserIDs: recipientIds,
+      message: sticker.label,
+      messageType: 'sticker',
+      stickerId: sticker.id,
+      stickerLabel: sticker.label,
+      stickerEmoji: sticker.emoji,
       type: activeThread?.type || composeType,
       threadTitle: activeThread?.threadTitle || threadTitle,
     });
@@ -956,6 +1100,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                   const readIndicatorUsers = readIndicatorsByMessageId.get(message.id) || [];
                   const reactionSummary = getReactionSummary(message);
                   const myReaction = (message.reactions || []).find(item => String(item.userId) === String(currentUser.id))?.reaction || '';
+                  const isStickerMessage = message.messageType === 'sticker';
                   return (
                     <div key={message.id} className={`group/message flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
                       <div className={`relative max-w-[78%] ${mine ? 'items-end' : 'items-start'}`}>
@@ -982,12 +1127,23 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                             className={`h-7 w-7 rounded-full border border-neutral-medium bg-white text-secondary shadow-md transition-all hover:border-primary hover:text-primary dark:border-gray-700 dark:bg-gray-800 ${reactionPickerMessageId === message.id ? 'opacity-100 scale-100' : 'opacity-0 scale-95 group-hover/message:opacity-100 group-hover/message:scale-100'}`}
                             title="React to message"
                           >
-                            <SmilePlus size={14} className="mx-auto" />
+                            <Smile size={14} className="mx-auto" />
                           </button>
                         </div>
-                        <div className={`rounded-2xl px-4 py-2 shadow-sm ${reactionSummary.length > 0 ? 'pb-4' : ''} ${mine ? 'bg-primary text-white rounded-br-md' : 'bg-white dark:bg-gray-800 text-neutral-dark dark:text-white border border-neutral-medium/70 dark:border-gray-700 rounded-bl-md'}`}>
+                        <div className={`rounded-2xl shadow-sm ${isStickerMessage ? 'px-3 py-3' : 'px-4 py-2'} ${reactionSummary.length > 0 ? 'pb-4' : ''} ${mine ? 'bg-primary text-white rounded-br-md' : 'bg-white dark:bg-gray-800 text-neutral-dark dark:text-white border border-neutral-medium/70 dark:border-gray-700 rounded-bl-md'}`}>
                           {!mine && <p className="text-[9px] font-black text-secondary mb-1">{fullName(userById.get(String(message.senderUserID)))}</p>}
-                          <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap">{renderMessageText(message, mine)}</p>
+                          {isStickerMessage ? (
+                            <div className="flex min-w-[118px] flex-col items-center gap-1.5">
+                              <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-white/90 text-5xl shadow-inner ring-1 ring-black/5 dark:bg-gray-900/60">
+                                {message.stickerEmoji || '\u{1F4AC}'}
+                              </div>
+                              <p className={`text-center text-[10px] font-black uppercase tracking-wider ${mine ? 'text-white/90' : 'text-secondary dark:text-gray-400'}`}>
+                                {message.stickerLabel || message.message}
+                              </p>
+                            </div>
+                          ) : (
+                            <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap">{renderMessageText(message, mine)}</p>
+                          )}
                           <p className={`text-[9px] font-bold mt-1 ${mine ? 'text-right text-white/70' : 'text-secondary/60'}`}>{formatTime(message.createdAt)}</p>
                         </div>
                         {reactionSummary.length > 0 && (
@@ -1059,12 +1215,74 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
               </div>
             )}
             <div className="flex items-end gap-2">
+              <div className="relative" ref={messageToolsRef}>
+                {messageToolsOpen && (
+                  <div className="absolute bottom-full left-0 z-40 mb-2 w-[264px] overflow-hidden rounded-2xl border border-neutral-medium bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800">
+                    <div className="flex items-center justify-between border-b border-neutral-medium/70 px-3 py-2 dark:border-gray-700">
+                      <div className="flex rounded-xl bg-neutral-light/70 p-1 dark:bg-gray-900/70">
+                        <button
+                          type="button"
+                          onClick={() => setMessageToolsTab('emoji')}
+                          className={`rounded-lg px-3 py-1.5 text-[10px] font-black transition-all ${messageToolsTab === 'emoji' ? 'bg-white text-primary shadow-sm dark:bg-gray-800' : 'text-secondary hover:text-neutral-dark dark:hover:text-white'}`}
+                        >
+                          Emoji
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMessageToolsTab('stickers')}
+                          className={`rounded-lg px-3 py-1.5 text-[10px] font-black transition-all ${messageToolsTab === 'stickers' ? 'bg-white text-primary shadow-sm dark:bg-gray-800' : 'text-secondary hover:text-neutral-dark dark:hover:text-white'}`}
+                        >
+                          Stickers
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setMessageToolsOpen(false)}
+                        className="text-secondary hover:text-primary"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+
+                    <div className="h-[330px]">
+                      {messageToolsTab === 'emoji' ? (
+                        <div ref={emojiPickerMountRef} className="h-full [&_em-emoji-picker]:h-full [&_em-emoji-picker]:max-h-full [&_em-emoji-picker]:w-full [&_em-emoji-picker]:border-0 [&_em-emoji-picker]:shadow-none" />
+                      ) : (
+                        <div className="grid h-full grid-cols-3 content-start justify-items-center gap-2.5 overflow-y-auto p-3 custom-scrollbar">
+                          {CHAT_STICKERS.map(sticker => (
+                            <button
+                              key={sticker.id}
+                              type="button"
+                              onClick={() => handleSendSticker(sticker)}
+                              disabled={pollingPaused || (composeMode && (composeType === 'group' ? selectedRecipients.length < 2 : !selectedRecipient))}
+                              className="group flex h-[52px] w-[52px] flex-col items-center justify-center rounded-2xl border border-neutral-medium/70 bg-neutral-light/40 text-2xl transition-all hover:border-primary/30 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:bg-gray-900/30"
+                              title={sticker.label}
+                            >
+                              <span>{sticker.emoji}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setMessageToolsOpen(open => !open)}
+                  disabled={pollingPaused || (composeMode && (composeType === 'group' ? selectedRecipients.length < 2 : !selectedRecipient))}
+                  className="h-11 w-11 flex-shrink-0 rounded-full border border-neutral-medium bg-white text-secondary flex items-center justify-center transition-colors hover:border-primary hover:text-primary disabled:opacity-40 disabled:cursor-not-allowed dark:border-gray-700 dark:bg-gray-900"
+                  title="Open emoji and stickers"
+                >
+                  {messageToolsTab === 'stickers' ? <Sticker size={15} /> : <Smile size={15} />}
+                </button>
+              </div>
               <textarea
                 ref={draftInputRef}
                 value={draft}
                 onChange={(e) => {
                   setDraft(e.target.value);
                   syncMentionState(e.target.value, e.target.selectionStart);
+                  resizeDraftInput(e.target);
                 }}
                 onClick={(e) => syncMentionState(draft, e.currentTarget.selectionStart)}
                 onKeyUp={(e) => {
@@ -1078,9 +1296,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                     insertMention(mentionOptions[0]);
                     return;
                   }
-                  if (e.key === 'Escape' && mentionState) {
+                  if (e.key === 'Escape' && (mentionState || messageToolsOpen)) {
                     e.preventDefault();
                     setMentionState(null);
+                    setMessageToolsOpen(false);
                     return;
                   }
                   if (e.key === 'Enter' && !e.shiftKey) {
@@ -1089,13 +1308,13 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                   }
                 }}
                 placeholder="Type a message..."
-                rows={2}
-                className="flex-1 resize-none rounded-2xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-3 text-xs font-semibold outline-none focus:border-primary"
+                rows={1}
+                className="flex-1 min-h-[44px] max-h-[116px] resize-none rounded-[22px] border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-[12px] text-xs font-semibold leading-[18px] outline-none focus:border-primary [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-secondary/50 [&::-webkit-scrollbar-track]:bg-transparent"
               />
               <button
                 onClick={handleSend}
                 disabled={!draft.trim() || (composeMode && (composeType === 'group' ? selectedRecipients.length < 2 : !selectedRecipient))}
-                className="h-11 w-11 rounded-full bg-primary text-white flex items-center justify-center shadow-lg shadow-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="h-11 w-11 flex-shrink-0 rounded-full bg-primary text-white flex items-center justify-center shadow-lg shadow-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Send size={16} />
               </button>

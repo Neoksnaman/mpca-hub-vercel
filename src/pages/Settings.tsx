@@ -1,10 +1,10 @@
-import React, { useContext, useState, useRef, useMemo } from 'react';
+import React, { useContext, useState, useRef, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { AppContext } from '../App';
 import UserHoverCard from '../components/UserHoverCard';
 import { User, UserRole } from '../types';
 import { CHROME_PRESET_AVATARS } from '../utils/avatarPresets';
-import { createUser, updateUserAdmin, updateUserProfile, updateUserPassword, uploadAvatar } from '../services/googleSheetsService';
+import { createUser, fetchAuditLogs, updateUserAdmin, updateUserProfile, updateUserPassword, uploadAvatar } from '../services/googleSheetsService';
 import {
     User as UserIcon,
     Settings as SettingsIcon,
@@ -21,6 +21,11 @@ import {
     Upload,
     Plus,
     Pencil,
+    ChevronDown,
+    Loader2,
+    Eye,
+    Copy,
+    Search,
     X
 } from 'lucide-react';
 
@@ -31,6 +36,62 @@ const getInitialsAvatarUrl = (firstName: string, lastName: string, bgColor: stri
 
 const getUserFullName = (user: any) => `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
 const sortUsersByName = (users: any[]) => [...users].sort((a, b) => getUserFullName(a).localeCompare(getUserFullName(b)));
+const toDateInputValue = (date: Date) => date.toISOString().slice(0, 10);
+
+const formatAuditTimestamp = (value: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('default', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+const formatAuditFieldLabel = (key: string) => {
+    const labels: Record<string, string> = {
+        clientID: 'Client',
+        retainerID: 'Retainer',
+        specialID: 'Special Project',
+        deadlineID: 'Deadline',
+        taskID: 'Task',
+        activityID: 'Progress',
+        credentialID: 'Credential',
+        transmittalID: 'Transmittal',
+        meetingID: 'Meeting',
+        serviceID: 'Service',
+        taxID: 'Tax Compliance',
+        assignedStaffID: 'Assigned Staff',
+        userID: 'User',
+        userIDs: 'Attendees',
+        receiptUrl: 'Official Slip',
+        momUrl: 'Minutes Attachment',
+        itemCount: 'Document Count',
+        attendeeCount: 'Attendee Count',
+        receiverName: 'Receiver Name',
+        receiverAddress: 'Receiver Address',
+        dateCompleted: 'Date Completed'
+    };
+    return labels[key] || key
+        .replace(/ID$/, '')
+        .replace(/Id$/, '')
+        .replace(/([A-Z])/g, ' $1')
+        .replace(/^./, char => char.toUpperCase())
+        .trim();
+};
+
+const getAuditDetailRows = (details: any) => {
+    const before = details?.before || {};
+    const after = details?.after || {};
+    const hiddenKeys = new Set(['clientID', 'retainerID', 'specialID', 'credentialID', 'deadlineID', 'taskID', 'activityID', 'transmittalID', 'meetingID']);
+    const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+        .filter((key) => !hiddenKeys.has(key));
+    return keys
+        .filter((key) => String(before[key] ?? '') !== String(after[key] ?? ''))
+        .map((key) => ({
+            key,
+            label: formatAuditFieldLabel(key),
+            before: before[key],
+            after: after[key]
+        }));
+};
 
 const Settings: React.FC = () => {
     const context = useContext(AppContext);
@@ -83,6 +144,249 @@ const Settings: React.FC = () => {
     const [editingUser, setEditingUser] = useState<User | null>(null);
     const [userForm, setUserForm] = useState(emptyUserForm);
     const [isSavingUser, setIsSavingUser] = useState(false);
+    const [adminAuditLogs, setAdminAuditLogs] = useState<any[]>([]);
+    const [isAdminAuditLoading, setIsAdminAuditLoading] = useState(false);
+    const [adminAuditPage, setAdminAuditPage] = useState(1);
+    const [adminAuditTotalPages, setAdminAuditTotalPages] = useState(1);
+    const [expandedAdminAuditLogId, setExpandedAdminAuditLogId] = useState<string | null>(null);
+    const [visibleAdminAuditPasswordCells, setVisibleAdminAuditPasswordCells] = useState<Set<string>>(new Set());
+    const [adminAuditSearch, setAdminAuditSearch] = useState('');
+    const [debouncedAdminAuditSearch, setDebouncedAdminAuditSearch] = useState('');
+    const [adminAuditModule, setAdminAuditModule] = useState('all');
+    const [adminAuditUserId, setAdminAuditUserId] = useState('all');
+    const [adminAuditDateRange, setAdminAuditDateRange] = useState('all');
+
+    const normalizeAuditId = (value: any) => String(value || '').replace(/^0+/, '') || String(value || '');
+
+    const clientById = useMemo(() => {
+        const map = new Map<string, any>();
+        (context.clients || []).forEach((client: any) => {
+            [client.id, client.clientID, client._id].filter(Boolean).forEach((id) => {
+                map.set(String(id), client);
+                map.set(normalizeAuditId(id), client);
+            });
+        });
+        return map;
+    }, [context.clients]);
+
+    const serviceById = useMemo(() => {
+        const map = new Map<string, any>();
+        (context.services || []).forEach((service: any) => {
+            [service.id, service.serviceID, service._id].filter(Boolean).forEach((id) => {
+                map.set(String(id), service);
+                map.set(normalizeAuditId(id), service);
+            });
+        });
+        return map;
+    }, [context.services]);
+
+    const taxById = useMemo(() => {
+        const map = new Map<string, any>();
+        (context.taxCompliances || []).forEach((tax: any) => {
+            [tax.id, tax.taxID, tax._id].filter(Boolean).forEach((id) => {
+                map.set(String(id), tax);
+                map.set(normalizeAuditId(id), tax);
+            });
+        });
+        return map;
+    }, [context.taxCompliances]);
+
+    const userById = useMemo(() => {
+        const map = new Map<string, any>();
+        (allUsers || []).forEach((member: any) => {
+            [member.id, member.userID, member._id].filter(Boolean).forEach((id) => {
+                map.set(String(id), member);
+                map.set(normalizeAuditId(id), member);
+            });
+        });
+        return map;
+    }, [allUsers]);
+
+    const meetingById = useMemo(() => {
+        const map = new Map<string, any>();
+        (context.meetings || []).forEach((meeting: any) => {
+            [meeting.id, meeting.meetingID, meeting._id].filter(Boolean).forEach((id) => {
+                map.set(String(id), meeting);
+                map.set(normalizeAuditId(id), meeting);
+            });
+        });
+        return map;
+    }, [context.meetings]);
+
+    const sortedAuditUsers = useMemo(() => sortUsersByName(allUsers || []), [allUsers]);
+    const auditModuleOptions = [
+        { value: 'all', label: 'All modules' },
+        { value: 'clients', label: 'Clients' },
+        { value: 'retainers', label: 'Retainers' },
+        { value: 'specialProjects', label: 'Special Projects' },
+        { value: 'credentials', label: 'Credentials' },
+        { value: 'transmittals', label: 'Transmittals' },
+        { value: 'meetings', label: 'Meetings' },
+        { value: 'settings', label: 'Settings' }
+    ];
+
+    const formatAdminAuditPeriod = (value: any) => {
+        const text = String(value || '').trim();
+        const match = text.match(/^(\d{1,2})\/(\d{4})$/);
+        if (!match) return text;
+        const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        const monthIndex = Number(match[1]) - 1;
+        return monthNames[monthIndex] ? `${monthNames[monthIndex]} ${match[2]}` : text;
+    };
+
+    const getAdminAuditDateParams = (range = adminAuditDateRange) => {
+        if (range === 'all') return {};
+        const now = new Date();
+        const start = new Date(now);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(now);
+        end.setHours(23, 59, 59, 999);
+
+        if (range === 'week') {
+            const day = start.getDay();
+            const diff = day === 0 ? 6 : day - 1;
+            start.setDate(start.getDate() - diff);
+        } else if (range === 'month') {
+            start.setDate(1);
+        }
+
+        return {
+            dateFrom: start.toISOString(),
+            dateTo: end.toISOString()
+        };
+    };
+
+    const selectedAuditDateLabel = useMemo(() => {
+        const params = getAdminAuditDateParams(adminAuditDateRange);
+        if (!params.dateFrom || !params.dateTo) return 'All dates';
+        return `${toDateInputValue(new Date(params.dateFrom))} to ${toDateInputValue(new Date(params.dateTo))}`;
+    }, [adminAuditDateRange]);
+
+    const formatAdminAuditValue = (key: string, value: any, cellKey = '') => {
+        const text = String(value ?? '').trim();
+        if (!text) return 'Blank';
+        const normalized = normalizeAuditId(text);
+        if (key === 'clientID') return clientById.get(text)?.name || clientById.get(normalized)?.name || text;
+        if (key === 'serviceID') return serviceById.get(text)?.name || serviceById.get(normalized)?.name || text;
+        if (key === 'deadlineConfig') {
+            return text.split(' | ').map((entry) => {
+                const [serviceId, taxId, dueDate] = entry.split(':');
+                const service = serviceById.get(serviceId) || serviceById.get(normalizeAuditId(serviceId));
+                const tax = taxById.get(taxId) || taxById.get(normalizeAuditId(taxId));
+                const label = tax?.complianceName || tax?.complianceCode || service?.name || service?.serviceName || serviceId;
+                return dueDate ? `${label} - ${dueDate}` : label;
+            }).join('; ');
+        }
+        if (key === 'taxID') {
+            const tax = taxById.get(text) || taxById.get(normalized);
+            return tax?.complianceName || tax?.complianceCode || text;
+        }
+        if (['assignedStaffID', 'userID', 'userId'].includes(key)) {
+            const member = userById.get(text) || userById.get(normalized);
+            return member ? `${member.firstName || ''} ${member.lastName || ''}`.trim() : text;
+        }
+        if (key === 'userIDs') {
+            return text.split(',').map(id => {
+                const member = userById.get(id.trim()) || userById.get(normalizeAuditId(id.trim()));
+                return member ? `${member.firstName || ''} ${member.lastName || ''}`.trim() : id.trim();
+            }).filter(Boolean).join(', ') || 'Blank';
+        }
+        if (key === 'receiptUrl') return text ? 'Attached slip' : 'No slip';
+        if (key === 'momUrl') return text ? 'Attached minutes' : 'No attachment';
+        if (key === 'password') {
+            const isVisible = visibleAdminAuditPasswordCells.has(cellKey);
+            return (
+                <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="truncate font-mono">{isVisible ? text : '••••••••'}</span>
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            setVisibleAdminAuditPasswordCells(prev => {
+                                const next = new Set(prev);
+                                if (next.has(cellKey)) next.delete(cellKey);
+                                else next.add(cellKey);
+                                return next;
+                            });
+                        }}
+                        className="shrink-0 text-secondary hover:text-primary transition-colors"
+                        title={isVisible ? 'Hide password' : 'Show password'}
+                    >
+                        <Eye size={11} />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            navigator.clipboard.writeText(text);
+                        }}
+                        className="shrink-0 text-secondary hover:text-primary transition-colors"
+                        title="Copy password"
+                    >
+                        <Copy size={11} />
+                    </button>
+                </div>
+            );
+        }
+        return text;
+    };
+
+    const formatAdminAuditEntity = (log: any) => {
+        const details = log.details || {};
+        const meetingId = String(details.meetingID || log.entityId || '').trim();
+        const meeting = meetingId ? meetingById.get(meetingId) || meetingById.get(normalizeAuditId(meetingId)) : null;
+        const meetingSubject = details.after?.subject || details.before?.subject || meeting?.subject || '';
+        const parts = [
+            log.entityType ? formatAuditFieldLabel(log.entityType) : '',
+            details.clientID ? `Client: ${formatAdminAuditValue('clientID', details.clientID)}` : '',
+            (log.entityType === 'retainerFiling' && (details.period || log.period)) ? `Tax Period: ${formatAdminAuditPeriod(details.period || log.period)}` : '',
+            details.transmittalID ? `Transmittal: ${details.transmittalID}` : '',
+            log.entityType === 'meeting' ? `Meeting: ${meetingSubject || meetingId || 'Untitled Meeting'}` : '',
+        ].filter(Boolean);
+        return parts.join(' · ');
+    };
+
+    const loadAdminAuditLogs = async (page = 1) => {
+        if (user?.role !== UserRole.ADMIN) return;
+        setIsAdminAuditLoading(true);
+        try {
+            const result = await fetchAuditLogs({
+                limit: 10,
+                page,
+                module: adminAuditModule !== 'all' ? adminAuditModule : undefined,
+                userId: adminAuditUserId !== 'all' ? adminAuditUserId : undefined,
+                search: debouncedAdminAuditSearch.trim() || undefined,
+                ...getAdminAuditDateParams(adminAuditDateRange)
+            });
+            setAdminAuditLogs(result.logs || []);
+            setAdminAuditPage(result.page || page);
+            setAdminAuditTotalPages(result.totalPages || 1);
+            setExpandedAdminAuditLogId(null);
+            setVisibleAdminAuditPasswordCells(new Set());
+        } catch (error: any) {
+            setAdminAuditLogs([]);
+            setAdminAuditPage(1);
+            setAdminAuditTotalPages(1);
+            setExpandedAdminAuditLogId(null);
+            setVisibleAdminAuditPasswordCells(new Set());
+            showToast(error.message || 'Unable to load audit logs.', 'error');
+        } finally {
+            setIsAdminAuditLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        const timeout = window.setTimeout(() => {
+            setDebouncedAdminAuditSearch(adminAuditSearch.trim());
+        }, 450);
+        return () => window.clearTimeout(timeout);
+    }, [adminAuditSearch]);
+
+    useEffect(() => {
+        if (activeTab === 'admin' && user?.role === UserRole.ADMIN) {
+            loadAdminAuditLogs(1);
+        }
+    }, [activeTab, user?.role, debouncedAdminAuditSearch, adminAuditModule, adminAuditUserId, adminAuditDateRange]);
 
     const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -826,6 +1130,190 @@ const Settings: React.FC = () => {
                                     ))}
                                     </div>
                                 </div>
+                                </div>
+                            </div>
+
+                            <div className="bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm overflow-hidden">
+                                <div className="px-6 py-5 border-b border-neutral-medium/70 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                    <div>
+                                        <h3 className="text-base font-black text-neutral-dark dark:text-white">Audit Logs</h3>
+                                        <p className="text-xs text-secondary dark:text-gray-400 font-medium mt-1">
+                                            Review recent workspace changes across clients, engagements, operations, and settings.
+                                        </p>
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => loadAdminAuditLogs(adminAuditPage)}
+                                        disabled={isAdminAuditLoading}
+                                        className="inline-flex items-center justify-center gap-2 rounded-2xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-2.5 text-xs font-black uppercase tracking-widest text-secondary hover:text-primary hover:border-primary/30 transition-all disabled:opacity-50"
+                                    >
+                                        {isAdminAuditLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                                        Refresh
+                                    </button>
+                                </div>
+
+                                <div className="p-6">
+                                    <div className="mb-4 rounded-2xl border border-neutral-medium/70 dark:border-gray-700 bg-neutral-light/25 dark:bg-gray-900/25 p-3 space-y-3">
+                                        <div className="relative">
+                                            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary/50" />
+                                            <input
+                                                type="text"
+                                                value={adminAuditSearch}
+                                                onChange={(event) => setAdminAuditSearch(event.target.value)}
+                                                placeholder="Search audit logs, users, clients, projects..."
+                                                className="w-full rounded-2xl border border-neutral-medium/70 dark:border-gray-700 bg-white dark:bg-gray-800 py-2.5 pl-9 pr-3 text-xs font-bold text-neutral-dark dark:text-white outline-none focus:border-primary/40 focus:ring-4 focus:ring-primary/5 placeholder:text-secondary/50"
+                                            />
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                            <select
+                                                value={adminAuditModule}
+                                                onChange={(event) => setAdminAuditModule(event.target.value)}
+                                                className="rounded-2xl border border-neutral-medium/70 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2.5 text-xs font-black text-neutral-dark dark:text-white outline-none focus:border-primary/40 focus:ring-4 focus:ring-primary/5"
+                                            >
+                                                {auditModuleOptions.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+
+                                            <select
+                                                value={adminAuditUserId}
+                                                onChange={(event) => setAdminAuditUserId(event.target.value)}
+                                                className="rounded-2xl border border-neutral-medium/70 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2.5 text-xs font-black text-neutral-dark dark:text-white outline-none focus:border-primary/40 focus:ring-4 focus:ring-primary/5"
+                                            >
+                                                <option value="all">All users</option>
+                                                {sortedAuditUsers.map((member: any) => (
+                                                    <option key={member.id || member.userID} value={member.id || member.userID}>
+                                                        {getUserFullName(member) || member.username}
+                                                    </option>
+                                                ))}
+                                            </select>
+
+                                            <select
+                                                value={adminAuditDateRange}
+                                                onChange={(event) => setAdminAuditDateRange(event.target.value)}
+                                                className="rounded-2xl border border-neutral-medium/70 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2.5 text-xs font-black text-neutral-dark dark:text-white outline-none focus:border-primary/40 focus:ring-4 focus:ring-primary/5"
+                                            >
+                                                <option value="all">All dates</option>
+                                                <option value="today">Today</option>
+                                                <option value="week">This week</option>
+                                                <option value="month">This month</option>
+                                            </select>
+                                        </div>
+
+                                        {(adminAuditSearch || adminAuditModule !== 'all' || adminAuditUserId !== 'all' || adminAuditDateRange !== 'all') && (
+                                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                                <p className="text-[10px] font-bold text-secondary dark:text-gray-400">
+                                                    Filtered by {auditModuleOptions.find(option => option.value === adminAuditModule)?.label || 'All modules'} · {selectedAuditDateLabel}
+                                                </p>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setAdminAuditSearch('');
+                                                        setDebouncedAdminAuditSearch('');
+                                                        setAdminAuditModule('all');
+                                                        setAdminAuditUserId('all');
+                                                        setAdminAuditDateRange('all');
+                                                    }}
+                                                    className="w-fit text-[10px] font-black uppercase tracking-widest text-primary hover:text-primary/80 transition-colors"
+                                                >
+                                                    Clear filters
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="bg-white/85 dark:bg-gray-800/70 rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
+                                        <div className={`${adminAuditLogs.length > 0 || isAdminAuditLoading ? 'min-h-[360px]' : ''} transition-opacity duration-200 ${isAdminAuditLoading && adminAuditLogs.length > 0 ? 'opacity-70' : 'opacity-100'}`}>
+                                            {adminAuditLogs.length > 0 ? (
+                                                adminAuditLogs.map((log) => {
+                                                    const isExpanded = expandedAdminAuditLogId === log.id;
+                                                    const detailRows = getAuditDetailRows(log.details);
+                                                    const hasDetails = detailRows.length > 0;
+                                                    const entityText = formatAdminAuditEntity(log);
+                                                    return (
+                                                        <div key={log.id} className="border-b border-neutral-medium/40 dark:border-gray-700/60 last:border-0 hover:bg-neutral-light/50 dark:hover:bg-gray-800 transition-colors">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => hasDetails && setExpandedAdminAuditLogId(isExpanded ? null : log.id)}
+                                                                className="w-full px-5 py-3 text-left"
+                                                            >
+                                                                <div className="flex items-start justify-between gap-4">
+                                                                    <div className="min-w-0">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <p className="text-xs font-black text-neutral-dark dark:text-white">{log.actionLabel || log.action}</p>
+                                                                            {hasDetails && (
+                                                                                <ChevronDown size={13} className={`text-secondary/50 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                                                            )}
+                                                                        </div>
+                                                                        <p className="mt-1 text-[11px] font-bold text-secondary dark:text-gray-400">
+                                                                            {log.userName || 'System'}{log.userRole ? ` - ${log.userRole}` : ''}
+                                                                        </p>
+                                                                        {entityText && (
+                                                                            <p className="mt-1 text-[10px] font-bold text-secondary/60 dark:text-gray-500 truncate">{entityText}</p>
+                                                                        )}
+                                                                    </div>
+                                                                    <p className="shrink-0 text-[10px] font-bold text-secondary/70 dark:text-gray-400">{formatAuditTimestamp(log.createdAt)}</p>
+                                                                </div>
+                                                                {log.summary && (
+                                                                    <p className="mt-2 text-[11px] font-medium text-secondary dark:text-gray-400">{log.summary}</p>
+                                                                )}
+                                                            </button>
+                                                            {isExpanded && hasDetails && (
+                                                                <div className="mx-5 mb-3 rounded-xl border border-neutral-medium/50 dark:border-gray-700/70 bg-neutral-light/40 dark:bg-gray-900/40 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                                    <div className="grid grid-cols-[1fr_1fr_1fr] border-b border-neutral-medium/40 dark:border-gray-700/60 bg-white/50 dark:bg-gray-800/50">
+                                                                        <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Field</div>
+                                                                        <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Before</div>
+                                                                        <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">After</div>
+                                                                    </div>
+                                                                    {detailRows.map((row) => (
+                                                                        <div key={row.key} className="grid grid-cols-[1fr_1fr_1fr] items-start border-b border-neutral-medium/30 dark:border-gray-700/50 last:border-0">
+                                                                            <div className="px-3 py-2 text-[10px] font-black text-neutral-dark dark:text-white">{row.label}</div>
+                                                                            <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                                <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatAdminAuditValue(row.key, row.before, `${log.id}-${row.key}-before`)}</div>
+                                                                            </div>
+                                                                            <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                                <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatAdminAuditValue(row.key, row.after, `${log.id}-${row.key}-after`)}</div>
+                                                                            </div>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })
+                                            ) : isAdminAuditLoading ? (
+                                                <div className="h-[360px] flex flex-col items-center justify-center gap-2 text-xs font-bold text-secondary/60">
+                                                    <Loader2 size={16} className="animate-spin text-primary/70" />
+                                                    Loading audit logs...
+                                                </div>
+                                            ) : (
+                                                <div className="m-4 py-8 text-center border border-dashed border-neutral-medium dark:border-gray-700 rounded-[2rem] bg-white/40 dark:bg-gray-900/40">
+                                                    <p className="text-[9px] text-secondary font-black uppercase tracking-widest opacity-30">No audit logs recorded</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                        {adminAuditTotalPages > 1 && (
+                                            <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-neutral-medium/40 dark:border-gray-700/60 bg-neutral-light/30 dark:bg-gray-900/30">
+                                                <button
+                                                    onClick={() => loadAdminAuditLogs(Math.max(adminAuditPage - 1, 1))}
+                                                    disabled={isAdminAuditLoading || adminAuditPage <= 1}
+                                                    className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                                >
+                                                    Previous
+                                                </button>
+                                                <span className="text-[10px] font-black text-secondary dark:text-gray-400">Page {adminAuditPage} of {adminAuditTotalPages}</span>
+                                                <button
+                                                    onClick={() => loadAdminAuditLogs(Math.min(adminAuditPage + 1, adminAuditTotalPages))}
+                                                    disabled={isAdminAuditLoading || adminAuditPage >= adminAuditTotalPages}
+                                                    className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                                >
+                                                    Next
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
 

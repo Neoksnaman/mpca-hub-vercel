@@ -210,6 +210,10 @@ function mapMongoChatMessage(message: any) {
     threadId: message?.threadId || '',
     senderUserID: message?.senderUserID || '',
     message: message?.message || '',
+    messageType: message?.messageType || 'text',
+    stickerId: message?.stickerId || '',
+    stickerLabel: message?.stickerLabel || '',
+    stickerEmoji: message?.stickerEmoji || '',
     readBy: Array.isArray(message?.readBy) ? message.readBy.map(String) : [],
     mentions: Array.isArray(message?.mentions)
       ? message.mentions
@@ -632,6 +636,9 @@ async function ensureMongoIndexes() {
         createIndex('chatThreads', { participantKey: 1 }),
         createIndex('chatMessages', { threadId: 1, createdAt: -1 }),
         createIndex('auditLogs', { entityType: 1, entityId: 1, period: 1, createdAt: -1 }),
+        createIndex('auditLogs', { createdAt: -1 }),
+        createIndex('auditLogs', { userId: 1, createdAt: -1 }),
+        createIndex('auditLogs', { action: 1, createdAt: -1 }),
       ]);
     }).catch(error => {
       mongoIndexPromise = null;
@@ -1351,14 +1358,21 @@ app.post('/api/chat/messages', async (req, res) => {
     const threadId = String(req.body?.threadId || '').trim();
     const senderUserID = String(req.body?.senderUserID || '').trim();
     const message = String(req.body?.message || '').trim();
+    const messageType = String(req.body?.messageType || 'text').trim() === 'sticker' ? 'sticker' : 'text';
+    const stickerId = String(req.body?.stickerId || '').trim();
+    const stickerLabel = String(req.body?.stickerLabel || '').trim();
+    const stickerEmoji = String(req.body?.stickerEmoji || '').trim();
     const requestedType = String(req.body?.type || '').trim() === 'group' ? 'group' : 'direct';
     const threadTitle = String(req.body?.threadTitle || req.body?.title || '').trim();
     const recipientUserIDs = Array.isArray(req.body?.recipientUserIDs)
       ? req.body.recipientUserIDs.map((id: any) => String(id || '').trim()).filter(Boolean)
       : [];
 
-    if (!senderUserID || !message || (!threadId && recipientUserIDs.length === 0)) {
+    if (!senderUserID || (!message && messageType !== 'sticker') || (!threadId && recipientUserIDs.length === 0)) {
       return res.status(400).json({ error: 'senderUserID, recipientUserIDs, and message are required' });
+    }
+    if (messageType === 'sticker' && (!stickerId || !stickerLabel || !stickerEmoji)) {
+      return res.status(400).json({ error: 'Sticker details are required' });
     }
 
     const db = await getMongoDb();
@@ -1405,7 +1419,7 @@ app.post('/api/chat/messages', async (req, res) => {
       await db.collection<any>('chatThreads').insertOne(thread);
     }
 
-    const mentionText = message.toLowerCase();
+    const mentionText = messageType === 'text' ? message.toLowerCase() : '';
     const mentions = Array.isArray(req.body?.mentions)
       ? req.body.mentions
           .map((mention: any) => {
@@ -1435,7 +1449,11 @@ app.post('/api/chat/messages', async (req, res) => {
       _id: messageId,
       threadId: thread._id,
       senderUserID,
-      message,
+      message: messageType === 'sticker' ? stickerLabel : message,
+      messageType,
+      stickerId: messageType === 'sticker' ? stickerId : '',
+      stickerLabel: messageType === 'sticker' ? stickerLabel : '',
+      stickerEmoji: messageType === 'sticker' ? stickerEmoji : '',
       mentions,
       readBy: [senderUserID],
       reactions: [],
@@ -1447,7 +1465,7 @@ app.post('/api/chat/messages', async (req, res) => {
       { _id: thread._id },
       {
         $set: {
-          lastMessage: message,
+          lastMessage: messageType === 'sticker' ? `Sticker: ${stickerLabel}` : message,
           lastSenderUserID: senderUserID,
           lastMessageAt: now,
           updatedAt: now,
@@ -2369,6 +2387,10 @@ function formatAuditList(items: string[]) {
   return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function buildFieldChangeSummary(before: any, after: any, fallback: string) {
   const changedKeys = Array.from(new Set([...Object.keys(before || {}), ...Object.keys(after || {})]))
     .filter((key) => !['specialID', 'taskID', 'activityID'].includes(key))
@@ -2621,20 +2643,118 @@ app.get('/api/audit-logs', async (req, res) => {
     const entityType = String(req.query.entityType || '').trim();
     const entityId = String(req.query.entityId || '').trim();
     const period = String(req.query.period || '').trim();
+    const module = String(req.query.module || '').trim();
+    const userId = String(req.query.userId || '').trim();
+    const search = String(req.query.search || '').trim();
+    const dateFrom = String(req.query.dateFrom || '').trim();
+    const dateTo = String(req.query.dateTo || '').trim();
     const limit = Math.min(Math.max(parseInt(String(req.query.limit || '5'), 10) || 5, 1), 50);
     const page = Math.max(parseInt(String(req.query.page || '1'), 10) || 1, 1);
     const skip = (page - 1) * limit;
-    if (!entityType || !entityId) return res.status(400).json({ error: 'entityType and entityId are required' });
-
     const db = await getMongoDb();
-    const entityIds = userIdCandidates(entityId);
-    const query: any = {
-      $or: [
+    const query: any = {};
+    const andConditions: any[] = [];
+    if (entityType || entityId) {
+      if (!entityType || !entityId) return res.status(400).json({ error: 'entityType and entityId are required together' });
+      const entityIds = userIdCandidates(entityId);
+      andConditions.push({ $or: [
         { entityType, entityId: { $in: entityIds } },
         { relatedEntityType: entityType, relatedEntityId: { $in: entityIds } }
-      ]
-    };
+      ] });
+    } else {
+      const requestUser = await getRequestUser(req);
+      if (requestUser?.role !== 'Admin') {
+        return res.status(403).json({ error: 'Only Admin can view all audit logs' });
+      }
+    }
     if (period) query.period = period;
+    if (userId) query.userId = { $in: userIdCandidates(userId) };
+
+    if (dateFrom || dateTo) {
+      const createdAt: any = {};
+      if (dateFrom) {
+        const from = new Date(dateFrom);
+        if (!Number.isNaN(from.getTime())) createdAt.$gte = from;
+      }
+      if (dateTo) {
+        const to = new Date(dateTo);
+        if (!Number.isNaN(to.getTime())) createdAt.$lte = to;
+      }
+      if (Object.keys(createdAt).length > 0) query.createdAt = createdAt;
+    }
+
+    const moduleConditions: Record<string, any> = {
+      clients: { entityType: 'client', action: { $regex: '^client_' } },
+      retainers: {
+        $or: [
+          { entityType: 'retainerFiling' },
+          { action: { $regex: '^retainer_' } },
+          { action: { $regex: '^deadline_' } }
+        ]
+      },
+      specialProjects: {
+        $or: [
+          { entityType: 'specialProject' },
+          { action: { $regex: '^special_' } },
+          { action: { $regex: '^task_' } },
+          { action: { $regex: '^progress_' } }
+        ]
+      },
+      credentials: { action: { $regex: '^credential_' } },
+      transmittals: { entityType: 'transmittal' },
+      meetings: { entityType: 'meeting' },
+      settings: { action: { $regex: '^user_' } }
+    };
+    if (module && module !== 'all' && moduleConditions[module]) {
+      andConditions.push(moduleConditions[module]);
+    }
+
+    if (search) {
+      const regex = new RegExp(escapeRegExp(search), 'i');
+      const [matchedClients, matchedServices, matchedTaxes, matchedUsers] = await Promise.all([
+        db.collection('clients').find({ clientName: regex }, { projection: { clientID: 1, _id: 1 } }).limit(25).toArray(),
+        db.collection('services').find({ serviceName: regex }, { projection: { serviceID: 1, _id: 1 } }).limit(25).toArray(),
+        db.collection('taxCompliances').find({
+          $or: [{ complianceName: regex }, { complianceCode: regex }]
+        }, { projection: { taxID: 1, _id: 1 } }).limit(25).toArray(),
+        db.collection('users').find({
+          $or: [{ firstName: regex }, { lastName: regex }, { userName: regex }, { email: regex }]
+        }, { projection: { userID: 1, _id: 1 } }).limit(25).toArray()
+      ]);
+      const clientIds = matchedClients.flatMap((item: any) => userIdCandidates(item.clientID || item._id));
+      const serviceIds = matchedServices.flatMap((item: any) => userIdCandidates(item.serviceID || item._id));
+      const taxIds = matchedTaxes.flatMap((item: any) => userIdCandidates(item.taxID || item._id));
+      const userIds = matchedUsers.flatMap((item: any) => userIdCandidates(item.userID || item._id));
+
+      andConditions.push({
+        $or: [
+          { action: regex },
+          { actionLabel: regex },
+          { summary: regex },
+          { userName: regex },
+          { userRole: regex },
+          { entityType: regex },
+          { entityId: regex },
+          { period: regex },
+          { 'details.clientID': { $in: clientIds } },
+          { 'details.serviceID': { $in: serviceIds } },
+          { 'details.taxID': { $in: taxIds } },
+          { 'details.assignedStaffID': { $in: userIds } },
+          { 'details.before.clientName': regex },
+          { 'details.after.clientName': regex },
+          { 'details.before.projectTitle': regex },
+          { 'details.after.projectTitle': regex },
+          { 'details.before.systemName': regex },
+          { 'details.after.systemName': regex },
+          { 'details.before.subject': regex },
+          { 'details.after.subject': regex },
+          { 'details.before.receiverName': regex },
+          { 'details.after.receiverName': regex }
+        ]
+      });
+    }
+
+    if (andConditions.length > 0) query.$and = andConditions;
 
     const collection = db.collection<any>('auditLogs');
     const [logs, total] = await Promise.all([

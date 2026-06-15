@@ -79,8 +79,8 @@ const getRetainerAuditDetailRows = (details: any) => {
     const before = details?.before || {};
     const after = details?.after || {};
     return [
-        { label: 'Filing Date', before: before.dateCompleted, after: after.dateCompleted },
-        { label: 'Remarks', before: before.remarks, after: after.remarks }
+        { key: 'dateCompleted', label: 'Filing Date', before: before.dateCompleted, after: after.dateCompleted },
+        { key: 'remarks', label: 'Remarks', before: before.remarks, after: after.remarks }
     ].filter((row) => String(row.before ?? '') !== String(row.after ?? ''));
 };
 
@@ -1653,7 +1653,7 @@ const Engagements: React.FC = () => {
                                                         retainerAuditLogs.map((log) => {
                                                             const isExpanded = expandedRetainerAuditLogId === log.id;
                                                             const detailRows = getRetainerAuditDetailRows(log.details);
-                                                            const hasDetails = Boolean(log.details?.before || log.details?.after);
+                                                            const hasDetails = detailRows.length > 0;
                                                             return (
                                                                 <div key={log.id} className="border-b border-neutral-medium/40 dark:border-gray-700/60 last:border-0 hover:bg-neutral-light/50 dark:hover:bg-gray-800 transition-colors">
                                                                     <button
@@ -1687,13 +1687,13 @@ const Engagements: React.FC = () => {
                                                                                 <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">After</div>
                                                                             </div>
                                                                             {detailRows.map((row) => (
-                                                                                <div key={row.label} className="grid grid-cols-[1fr_1fr_1fr] border-b border-neutral-medium/30 dark:border-gray-700/50 last:border-0">
+                                                                                <div key={row.key} className="grid grid-cols-[1fr_1fr_1fr] items-start border-b border-neutral-medium/30 dark:border-gray-700/50 last:border-0">
                                                                                     <div className="px-3 py-2 text-[10px] font-black text-neutral-dark dark:text-white">{row.label}</div>
                                                                                     <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
-                                                                                        <div className="max-h-20 overflow-y-auto break-words pr-1 custom-scrollbar">{formatAuditDetailValue(row.before)}</div>
+                                                                                        <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatAuditDetailValue(row.before)}</div>
                                                                                     </div>
                                                                                     <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
-                                                                                        <div className="max-h-20 overflow-y-auto break-words pr-1 custom-scrollbar">{formatAuditDetailValue(row.after)}</div>
+                                                                                        <div className="max-h-24 overflow-y-auto break-words pr-1 custom-scrollbar">{formatAuditDetailValue(row.after)}</div>
                                                                                     </div>
                                                                                 </div>
                                                                             ))}

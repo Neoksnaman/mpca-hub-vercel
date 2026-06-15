@@ -191,6 +191,10 @@ export interface ChatMessage {
   threadId: string;
   senderUserID: string;
   message: string;
+  messageType?: 'text' | 'sticker';
+  stickerId?: string;
+  stickerLabel?: string;
+  stickerEmoji?: string;
   readBy: string[];
   mentions?: ChatMention[];
   reactions?: {

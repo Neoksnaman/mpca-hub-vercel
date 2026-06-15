@@ -223,7 +223,19 @@ export const fetchChatMessages = (threadId: string, userId: string, limit = 10, 
     return apiCall<ChatMessage[]>(`/api/chat/messages?${params.toString()}`);
 };
 
-export const sendChatMessage = (data: { threadId?: string; senderUserID: string; recipientUserIDs: string[]; message: string; type?: 'direct' | 'group'; threadTitle?: string; mentions?: ChatMention[] }) =>
+export const sendChatMessage = (data: {
+    threadId?: string;
+    senderUserID: string;
+    recipientUserIDs: string[];
+    message: string;
+    type?: 'direct' | 'group';
+    threadTitle?: string;
+    mentions?: ChatMention[];
+    messageType?: 'text' | 'sticker';
+    stickerId?: string;
+    stickerLabel?: string;
+    stickerEmoji?: string;
+}) =>
     apiCall<{ success: boolean; threadId: string; message: ChatMessage }>('/api/chat/messages', {
         method: 'POST',
         body: JSON.stringify(data)
@@ -282,14 +294,30 @@ export const deleteRetainerLog = (deadline: string, period: string) => {
     return apiCall<any>(`/api/retainer-logs?${params.toString()}`, { method: 'DELETE' });
 };
 
-export const fetchAuditLogs = (params: { entityType: string; entityId: string; period?: string; limit?: number; page?: number }) => {
+export const fetchAuditLogs = (params: {
+    entityType?: string;
+    entityId?: string;
+    period?: string;
+    limit?: number;
+    page?: number;
+    module?: string;
+    userId?: string;
+    search?: string;
+    dateFrom?: string;
+    dateTo?: string;
+}) => {
     const query = new URLSearchParams({
-        entityType: params.entityType,
-        entityId: params.entityId,
         limit: String(params.limit || 5),
         page: String(params.page || 1)
     });
+    if (params.entityType) query.set('entityType', params.entityType);
+    if (params.entityId) query.set('entityId', params.entityId);
     if (params.period) query.set('period', params.period);
+    if (params.module) query.set('module', params.module);
+    if (params.userId) query.set('userId', params.userId);
+    if (params.search) query.set('search', params.search);
+    if (params.dateFrom) query.set('dateFrom', params.dateFrom);
+    if (params.dateTo) query.set('dateTo', params.dateTo);
     return apiCall<{ logs: any[]; total: number; page: number; totalPages: number }>(`/api/audit-logs?${query.toString()}`);
 };
 
