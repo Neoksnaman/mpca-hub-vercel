@@ -44,6 +44,25 @@ const getChangedAuditDetailRows = (details: any) => {
     }));
 };
 
+const parseDeadlineCode = (code: any) => {
+    const match = String(code || '').trim().match(/^(SM|[MQYA])([+-])([+-]?\d+)([DM])$/i);
+    if (!match) return { frequency: 'M', sign: '+', value: '10', unit: 'D' };
+
+    const signedValue = parseInt(match[3], 10);
+    return {
+        frequency: match[1].toUpperCase(),
+        sign: signedValue < 0 || match[2] === '-' ? '-' : '+',
+        value: String(Math.abs(signedValue || 0)).padStart(2, '0').slice(-2),
+        unit: match[4].toUpperCase()
+    };
+};
+
+const formatDeadlineCode = (parts: { frequency?: string; sign?: string; value?: string | number; unit?: string }) => {
+    const rawValue = String(parts.value ?? '0').replace(/[^\d]/g, '');
+    const value = String(rawValue ? Number(rawValue) : 0).padStart(2, '0').slice(-2);
+    return `${parts.frequency || 'M'}${parts.sign === '-' ? '-' : '+'}${value}${parts.unit || 'D'}`;
+};
+
 // --- Sub-components to reduce duplication ---
 
 const TaxComplianceRows = ({
@@ -51,20 +70,27 @@ const TaxComplianceRows = ({
     updateAssignment,
     context,
     targetClientId,
-    existingTaxIds
+    existingTaxIds,
+    mode = 'tax'
 }: {
     key?: React.Key,
     assignment: any,
     updateAssignment: (id: string, updates: any) => void,
     context: any,
     targetClientId: string,
-    existingTaxIds: Set<string>
+    existingTaxIds: Set<string>,
+    mode?: 'tax' | 'govt'
 }) => {
+    const complianceItems = mode === 'govt' ? (context?.govtContributions || []) : (context?.taxCompliances || []);
+    const idKey = mode === 'govt' ? 'id' : 'taxID';
+    const title = mode === 'govt' ? 'Required Government Contributions' : 'Required Compliances';
+    const emptyText = mode === 'govt' ? 'No government contributions added yet.' : 'No compliances added yet.';
+    const addLabel = mode === 'govt' ? 'Add Contribution' : 'Add Compliance';
     return (
         <div className="mt-3 p-4 bg-neutral-light/45 dark:bg-gray-900/50 border border-neutral-medium/60 dark:border-gray-700 rounded-xl space-y-3">
             <div className="flex items-center gap-2 mb-2">
                 <Shield size={14} className="text-primary" />
-                <span className="text-[10px] font-black text-neutral-dark dark:text-white">Required Compliances</span>
+                <span className="text-[10px] font-black text-neutral-dark dark:text-white">{title}</span>
             </div>
 
             {/* Table Header */}
@@ -73,7 +99,7 @@ const TaxComplianceRows = ({
                     <div className="flex-1">Tax Code</div>
                     <div className="w-16">Type</div>
                     <div className="w-[85px]">Frequency</div>
-                    <div className="w-2"></div>
+                    <div className="w-12">Sign</div>
                     <div className="w-10">Val</div>
                     <div className="w-16">Unit</div>
                     <div className="w-6"></div>
@@ -83,24 +109,20 @@ const TaxComplianceRows = ({
             <div className="space-y-2">
                 {(assignment.selectedTaxes || []).length === 0 && (
                     <div className="py-4 text-center border border-dashed border-neutral-medium dark:border-gray-700 rounded-lg">
-                        <p className="text-[10px] text-secondary italic font-medium">No compliances added yet.</p>
+                        <p className="text-[10px] text-secondary italic font-medium">{emptyText}</p>
                     </div>
                 )}
                 {(assignment.selectedTaxes || []).map((selectedTax: any, taxIndex: number) => {
-                    const availableTaxesMaster = (context?.taxCompliances || []);
-                    const masterTax = availableTaxesMaster.find((tc: any) => tc.taxID === selectedTax.taxID);
+                    const availableTaxesMaster = complianceItems;
+                    const masterTax = availableTaxesMaster.find((tc: any) => String(tc[idKey]) === String(selectedTax.taxID));
                     const pickedTaxIds = (assignment.selectedTaxes || []).map((st: any) => st.taxID).filter((id: any) => id && id !== selectedTax.taxID);
 
                     const availableTaxes = availableTaxesMaster.filter((tc: any) =>
-                        !pickedTaxIds.includes(tc.taxID) &&
-                        (!existingTaxIds.has(tc.taxID) || tc.taxID === selectedTax.taxID)
+                        !pickedTaxIds.includes(tc[idKey]) &&
+                        (!existingTaxIds.has(tc[idKey]) || tc[idKey] === selectedTax.taxID)
                     );
 
-                    const parts = selectedTax.dueDateCode.split('+');
-                    const freqPrefix = parts[0] || 'M';
-                    const valueWithUnit = parts[1] || '10D';
-                    const val = valueWithUnit.replace(/[^\d]/g, '');
-                    const unit = valueWithUnit.replace(/[\d]/g, '') || 'D';
+                    const deadlineParts = parseDeadlineCode(selectedTax.dueDateCode);
                     const isManual = selectedTax.isManual;
 
                     return (
@@ -110,19 +132,19 @@ const TaxComplianceRows = ({
                                     required
                                     value={selectedTax.taxID}
                                     onChange={(e) => {
-                                        const tc = context?.taxCompliances?.find((t: any) => t.taxID === e.target.value);
+                                        const tc = complianceItems.find((t: any) => String(t[idKey]) === String(e.target.value));
                                         const prefix = tc?.frequency === 'Monthly' ? 'M' : tc?.frequency === 'Quarterly' ? 'Q' : 'A';
                                         const days = tc?.frequency === 'Monthly' ? '10' : '25';
                                         const paddedDays = String(days).padStart(2, '0');
 
                                         const newTaxes = [...assignment.selectedTaxes];
-                                        newTaxes[taxIndex] = { taxID: e.target.value, dueDateCode: `${prefix}+${paddedDays}D`, isManual: false };
+                                        newTaxes[taxIndex] = { taxID: e.target.value, dueDateCode: formatDeadlineCode({ frequency: prefix, sign: '+', value: paddedDays, unit: 'D' }), isManual: false };
                                         updateAssignment(assignment.id, { selectedTaxes: newTaxes });
                                     }}
                                     className="w-full px-2 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-xs font-bold focus:ring-1 focus:ring-primary outline-none"
                                 >
                                     <option value="">Select Code...</option>
-                                    {availableTaxes.map((tc: any) => <option key={tc.taxID} value={tc.taxID}>{tc.complianceCode}</option>)}
+                                    {availableTaxes.map((tc: any) => <option key={tc[idKey]} value={tc[idKey]}>{tc.complianceCode}</option>)}
                                 </select>
                             </div>
 
@@ -149,11 +171,10 @@ const TaxComplianceRows = ({
                                     </span>
                                 ) : (
                                     <select
-                                        value={freqPrefix}
+                                        value={deadlineParts.frequency}
                                         onChange={(e) => {
                                             const newTaxes = [...assignment.selectedTaxes];
-                                            const paddedVal = String(val).padStart(2, '0');
-                                            newTaxes[taxIndex] = { ...selectedTax, dueDateCode: `${e.target.value}+${paddedVal}${unit}` };
+                                            newTaxes[taxIndex] = { ...selectedTax, dueDateCode: formatDeadlineCode({ ...deadlineParts, frequency: e.target.value }) };
                                             updateAssignment(assignment.id, { selectedTaxes: newTaxes });
                                         }}
                                         className="w-full px-1.5 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[9px] font-bold focus:ring-1 focus:ring-primary outline-none"
@@ -165,7 +186,20 @@ const TaxComplianceRows = ({
                                 )}
                             </div>
 
-                            <span className="text-secondary font-bold text-xs">+</span>
+                            <div className="w-12">
+                                <select
+                                    value={deadlineParts.sign}
+                                    onChange={(e) => {
+                                        const newTaxes = [...assignment.selectedTaxes];
+                                        newTaxes[taxIndex] = { ...selectedTax, dueDateCode: formatDeadlineCode({ ...deadlineParts, sign: e.target.value }) };
+                                        updateAssignment(assignment.id, { selectedTaxes: newTaxes });
+                                    }}
+                                    className="w-full px-1.5 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[10px] font-bold focus:ring-1 focus:ring-primary outline-none"
+                                >
+                                    <option value="+">+</option>
+                                    <option value="-">-</option>
+                                </select>
+                            </div>
 
                             <div className="w-10 bg-white dark:bg-gray-800 px-1 py-1 rounded-lg border border-neutral-medium dark:border-gray-700">
                                 <input
@@ -173,7 +207,7 @@ const TaxComplianceRows = ({
                                     min="0"
                                     max="99"
                                     className="w-full bg-transparent text-xs font-bold text-primary outline-none text-center [appearance:textfield]"
-                                    value={val}
+                                    value={deadlineParts.value}
                                     onChange={(e) => {
                                         let inputVal = e.target.value.replace(/[^\d]/g, '');
                                         const newTaxes = [...assignment.selectedTaxes];
@@ -186,7 +220,7 @@ const TaxComplianceRows = ({
                                         } else {
                                             finalVal = rawNum.slice(-2);
                                         }
-                                        newTaxes[taxIndex] = { ...selectedTax, dueDateCode: `${freqPrefix}+${finalVal || '00'}${unit}` };
+                                        newTaxes[taxIndex] = { ...selectedTax, dueDateCode: formatDeadlineCode({ ...deadlineParts, value: finalVal || '00' }) };
                                         updateAssignment(assignment.id, { selectedTaxes: newTaxes });
                                     }}
                                 />
@@ -194,11 +228,10 @@ const TaxComplianceRows = ({
 
                             <div className="w-16">
                                 <select
-                                    value={unit}
+                                    value={deadlineParts.unit}
                                     onChange={(e) => {
                                         const newTaxes = [...assignment.selectedTaxes];
-                                        const paddedVal = String(val).padStart(2, '0');
-                                        newTaxes[taxIndex] = { ...selectedTax, dueDateCode: `${freqPrefix}+${paddedVal}${e.target.value}` };
+                                        newTaxes[taxIndex] = { ...selectedTax, dueDateCode: formatDeadlineCode({ ...deadlineParts, unit: e.target.value }) };
                                         updateAssignment(assignment.id, { selectedTaxes: newTaxes });
                                     }}
                                     className="w-full px-1.5 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-[9px] font-bold focus:ring-1 focus:ring-primary outline-none"
@@ -226,7 +259,7 @@ const TaxComplianceRows = ({
                     onClick={() => updateAssignment(assignment.id, { selectedTaxes: [...(assignment.selectedTaxes || []), { taxID: '', dueDateCode: 'M+10D' }] })}
                     className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-primary px-2 py-1 hover:bg-primary/5 rounded-md"
                 >
-                    <Plus size={12} /> Add Compliance
+                    <Plus size={12} /> {addLabel}
                 </button>
             </div>
         </div>
@@ -280,7 +313,18 @@ const ServiceAssignmentBox = ({
             .map((d: any) => d.taxID)
             .filter(Boolean)
     ), [context?.deadlines, targetClientRetainerIds]);
+    const existingGovtIds = useMemo(() => new Set(
+        (context?.deadlines || [])
+            .filter((d: any) =>
+                targetClientRetainerIds.has(normalizeId(d.retainerID)) &&
+                normalizeId(d.serviceID) === '2'
+            )
+            .map((d: any) => d.taxID)
+            .filter(Boolean)
+    ), [context?.deadlines, targetClientRetainerIds]);
     const isTaxService = normalizeId(assignment.serviceId) === '1';
+    const isGovtService = normalizeId(assignment.serviceId) === '2';
+    const deadlineParts = parseDeadlineCode(assignment.dueDateCode || 'M+10D');
 
     const availableServices = (context?.services || [])
         .filter((s: any) => {
@@ -363,7 +407,7 @@ const ServiceAssignmentBox = ({
                     />
                 </div>
 
-                {assignment.serviceId && !isTaxService && (
+                {assignment.serviceId && !isTaxService && !isGovtService && (
                     <div className="col-span-full mt-1 p-4 bg-neutral-light/45 dark:bg-gray-900/50 border border-neutral-medium/60 dark:border-gray-700 rounded-xl space-y-3">
                         <div className="flex items-center gap-2 mb-1">
                             <Calendar size={12} className="text-primary" />
@@ -371,10 +415,9 @@ const ServiceAssignmentBox = ({
                         </div>
                         <div className="flex items-center gap-3">
                             <select
-                                value={assignment.dueDateCode.split('+')[0] || 'M'}
+                                value={deadlineParts.frequency}
                                 onChange={(e) => {
-                                    const parts = assignment.dueDateCode.split('+');
-                                    updateAssignment(assignment.id, { dueDateCode: `${e.target.value}+${parts[1] || '10D'}` });
+                                    updateAssignment(assignment.id, { dueDateCode: formatDeadlineCode({ ...deadlineParts, frequency: e.target.value }) });
                                 }}
                                 className="flex-1 px-2 py-1.5 bg-white dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold outline-none"
                             >
@@ -383,22 +426,28 @@ const ServiceAssignmentBox = ({
                                 <option value="Q">Quarterly</option>
                                 <option value="A">Annual</option>
                             </select>
-                            <div className="text-secondary font-black text-xs">+</div>
+                            <select
+                                value={deadlineParts.sign}
+                                onChange={(e) => updateAssignment(assignment.id, { dueDateCode: formatDeadlineCode({ ...deadlineParts, sign: e.target.value }) })}
+                                className="w-14 px-2 py-1.5 bg-white dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold outline-none"
+                            >
+                                <option value="+">+</option>
+                                <option value="-">-</option>
+                            </select>
                             <input
                                 type="number"
+                                min="0"
+                                max="99"
                                 className="w-12 px-1 py-1.5 bg-white dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold text-primary text-center outline-none"
-                                value={assignment.dueDateCode.split('+')[1]?.replace(/[^\d]/g, '') || '00'}
+                                value={deadlineParts.value}
                                 onChange={(e) => {
-                                    const parts = assignment.dueDateCode.split('+');
-                                    const unit = parts[1]?.replace(/[\d]/g, '') || 'D';
-                                    updateAssignment(assignment.id, { dueDateCode: `${parts[0] || 'M'}+${e.target.value.replace(/[^\d]/g, '').slice(-2).padStart(2, '0')}${unit}` });
+                                    updateAssignment(assignment.id, { dueDateCode: formatDeadlineCode({ ...deadlineParts, value: e.target.value.replace(/[^\d]/g, '').slice(-2) }) });
                                 }}
                             />
                             <select
-                                value={assignment.dueDateCode.split('+')[1]?.replace(/[\d]/g, '') || 'D'}
+                                value={deadlineParts.unit}
                                 onChange={(e) => {
-                                    const parts = assignment.dueDateCode.split('+');
-                                    updateAssignment(assignment.id, { dueDateCode: `${parts[0] || 'M'}+${parts[1]?.replace(/[^\d]/g, '') || '10'}${e.target.value}` });
+                                    updateAssignment(assignment.id, { dueDateCode: formatDeadlineCode({ ...deadlineParts, unit: e.target.value }) });
                                 }}
                                 className="w-20 px-2 py-1.5 bg-white dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-lg text-[11px] font-bold outline-none"
                             >
@@ -417,6 +466,18 @@ const ServiceAssignmentBox = ({
                     context={context}
                     targetClientId={targetClientId}
                     existingTaxIds={existingTaxIds}
+                    mode="tax"
+                />
+            )}
+
+            {isGovtService && (
+                <TaxComplianceRows
+                    assignment={assignment}
+                    updateAssignment={updateAssignment}
+                    context={context}
+                    targetClientId={targetClientId}
+                    existingTaxIds={existingGovtIds}
+                    mode="govt"
                 />
             )}
         </div>
@@ -1572,6 +1633,12 @@ const Clients: React.FC = () => {
         return map;
     }, [context?.taxCompliances]);
 
+    const govtById = useMemo(() => {
+        const map = new Map<string, any>();
+        (context?.govtContributions || []).forEach((item: any) => map.set(normalizeId(item.id), item));
+        return map;
+    }, [context?.govtContributions]);
+
     const userById = useMemo(() => {
         const map = new Map<string, any>();
         allUsers.forEach((user: any) => map.set(normalizeId(user.id || user.userID), user));
@@ -1585,7 +1652,7 @@ const Clients: React.FC = () => {
             return text.split(' | ').map((entry) => {
                 const [serviceId, taxId, dueDate] = entry.split(':');
                 const service = serviceById.get(normalizeId(serviceId));
-                const tax = taxById.get(normalizeId(taxId));
+                const tax = normalizeId(serviceId) === '2' ? govtById.get(normalizeId(taxId)) : taxById.get(normalizeId(taxId));
                 const label = tax?.complianceName || tax?.complianceCode || service?.name || service?.serviceName || serviceId;
                 return dueDate ? `${label} - ${dueDate}` : label;
             }).join('; ');
@@ -1719,6 +1786,8 @@ const Clients: React.FC = () => {
         // Check if service is Tax Compliances (ID: 0001)
         const serviceId = normalizeId(r.serviceType);
         const isTaxService = serviceId === '1' || serviceId === '0001';
+        const isGovtService = serviceId === '2' || serviceId === '0002';
+        const isMultiComplianceService = isTaxService || isGovtService;
 
         setEditingRetainerId(r.id);
 
@@ -1734,7 +1803,7 @@ const Clients: React.FC = () => {
             }
         }
 
-        const defaultDueDate = !isTaxService ? (associatedDeadlines[0]?.dueDate || 'M+10D') : '';
+        const defaultDueDate = !isMultiComplianceService ? (associatedDeadlines[0]?.dueDate || 'M+10D') : '';
 
         setAssignments([{
             id: r.id,
@@ -1742,7 +1811,7 @@ const Clients: React.FC = () => {
             assignedStaffId: staffUser?.id || r.assignedStaff,
             startDate: formattedDate,
             dueDateCode: defaultDueDate,
-            selectedTaxes: isTaxService ? associatedDeadlines.map((d: any) => ({
+            selectedTaxes: isMultiComplianceService ? associatedDeadlines.filter((d: any) => d.taxID).map((d: any) => ({
                 taxID: d.taxID,
                 dueDateCode: d.dueDate || '',
                 isManual: d.isManual === 'TRUE' || d.isManual === true
@@ -2078,6 +2147,17 @@ const Clients: React.FC = () => {
         e.preventDefault();
         if (!selectedClient || assignments.some(a => !a.serviceId || !a.assignedStaffId)) {
             context?.showToast('Please fill in all assignment details.', 'error');
+            return;
+        }
+        const invalidMultiCompliance = assignments.some(a => {
+            const serviceId = normalizeId(a.serviceId);
+            const isMultiCompliance = serviceId === '1' || serviceId === '2';
+            if (!isMultiCompliance) return false;
+            const rows = a.selectedTaxes || [];
+            return rows.length === 0 || rows.some((row: any) => !row.taxID || !row.dueDateCode);
+        });
+        if (invalidMultiCompliance) {
+            context?.showToast('Please complete all required compliance configurations.', 'error');
             return;
         }
 

@@ -146,6 +146,18 @@ function isTaxComplianceService(serviceId: any) {
   return toPaddedId(serviceId) === '0001';
 }
 
+function isGovtContributionService(serviceId: any) {
+  return toPaddedId(serviceId) === '0002';
+}
+
+function isMultiComplianceService(serviceId: any) {
+  return isTaxComplianceService(serviceId) || isGovtContributionService(serviceId);
+}
+
+function normalizeComplianceItemId(serviceId: any, itemId: any) {
+  return isTaxComplianceService(serviceId) ? toPaddedId(itemId) : String(itemId || '').trim();
+}
+
 function newRecordId(prefix: string) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
@@ -431,12 +443,53 @@ function mapMongoService(service: any) {
   };
 }
 
+function mapMongoServiceManual(manual: any) {
+  return {
+    id: String(manual?._id || manual?.id || ''),
+    serviceID: String(manual?.serviceID || ''),
+    title: manual?.title || manual?.serviceName || manual?.serviceID || '',
+    overview: manual?.overview || '',
+    manualGuide: manual?.manualGuide || '',
+    notes: manual?.notes || '',
+    requirements: Array.isArray(manual?.requirements)
+      ? manual.requirements
+        .map((requirement: any, index: number) => ({
+          id: String(requirement?.id || crypto.randomUUID()),
+          title: requirement?.title || '',
+          description: requirement?.description || '',
+          isRequired: requirement?.isRequired !== false,
+          templateFileId: requirement?.templateFileId || '',
+          templateFileName: requirement?.templateFileName || '',
+          templateUrl: requirement?.templateUrl || '',
+          sortOrder: Number(requirement?.sortOrder ?? index),
+          status: requirement?.status || 'Active'
+        }))
+        .sort((a: any, b: any) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0))
+      : [],
+    lastUpdatedBy: manual?.lastUpdatedBy || '',
+    lastUpdatedAt: manual?.lastUpdatedAt || '',
+    createdAt: manual?.createdAt || '',
+    updatedAt: manual?.updatedAt || ''
+  };
+}
+
 function mapMongoTaxCompliance(tax: any) {
   return {
     taxID: String(tax?.taxID || tax?._id || ''),
     complianceName: tax?.complianceName || '',
     complianceCode: tax?.complianceCode || '',
     frequency: tax?.frequency || ''
+  };
+}
+
+function mapMongoGovtContribution(contribution: any) {
+  return {
+    id: String(contribution?._id || contribution?.id || ''),
+    complianceName: contribution?.complianceName || '',
+    complianceCode: contribution?.complianceCode || '',
+    frequency: contribution?.frequency || 'Monthly',
+    createdAt: contribution?.createdAt || '',
+    updatedAt: contribution?.updatedAt || ''
   };
 }
 
@@ -728,8 +781,12 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     if (!req.file) throw new Error('No file uploaded');
     if (!ROOT_FOLDER_ID) throw new Error('GOOGLE_DRIVE_FOLDER_ID is not configured');
 
-    const { type } = req.body; // 'Transmittal' or 'Meeting'
-    const folderName = type === 'Meeting' ? 'Minutes of Meetings' : 'Transmittals';
+    const { type } = req.body; // 'Transmittal', 'Meeting', or 'Library'
+    const folderName = type === 'Meeting'
+      ? 'Minutes of Meetings'
+      : type === 'Library'
+        ? 'Library Templates'
+        : 'Transmittals';
 
     console.log(`[Drive] Uploading ${req.file.originalname} to ${folderName}...`);
 
@@ -1077,6 +1134,8 @@ app.get('/api/data', async (req, res) => {
       retainers,
       specials,
       services,
+      serviceManuals,
+      govtContributions,
       taxCompliances,
       deadlines,
       retainerLogs,
@@ -1110,6 +1169,16 @@ app.get('/api/data', async (req, res) => {
         .sort({ serviceID: 1 })
         .toArray()
         .then(rows => rows.map(mapMongoService)),
+      db.collection<any>('serviceManuals')
+        .find({}, { projection: { serviceID: 1, title: 1, overview: 1, manualGuide: 1, notes: 1, requirements: 1, lastUpdatedBy: 1, lastUpdatedAt: 1, createdAt: 1, updatedAt: 1 } })
+        .sort({ title: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoServiceManual)),
+      db.collection<any>('govtContributions')
+        .find({}, { projection: { complianceName: 1, complianceCode: 1, frequency: 1, createdAt: 1, updatedAt: 1 } })
+        .sort({ complianceCode: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoGovtContribution)),
       db.collection<any>('taxCompliances')
         .find({}, { projection: { taxID: 1, complianceName: 1, complianceCode: 1, frequency: 1 } })
         .sort({ taxID: 1 })
@@ -1164,6 +1233,8 @@ app.get('/api/data', async (req, res) => {
       users,
       clients,
       services,
+      serviceManuals,
+      govtContributions,
       retainerLogs,
       taskLog,
       activityLog,
@@ -1176,6 +1247,75 @@ app.get('/api/data', async (req, res) => {
     console.log(`[API /api/data] Loaded in ${Date.now() - startedAt}ms`);
   } catch (error: any) {
     console.error('API /api/data error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/service-manuals', async (req, res) => {
+  try {
+    const db = await getMongoDb();
+    const manualId = String(req.body?.id || '').trim();
+    const title = String(req.body?.title || '').trim();
+    if (!title) return res.status(400).json({ error: 'Manual title is required' });
+
+    const userID = String(req.body?.userID || req.cookies.user_id || '').trim();
+    const now = new Date().toISOString();
+    const requirements = Array.isArray(req.body?.requirements)
+      ? req.body.requirements
+        .map((requirement: any, index: number) => ({
+          id: String(requirement?.id || crypto.randomUUID()),
+          title: String(requirement?.title || '').trim(),
+          description: String(requirement?.description || '').trim(),
+          isRequired: requirement?.isRequired !== false,
+          templateFileId: String(requirement?.templateFileId || '').trim(),
+          templateFileName: String(requirement?.templateFileName || '').trim(),
+          templateUrl: String(requirement?.templateUrl || '').trim(),
+          sortOrder: Number(requirement?.sortOrder ?? index),
+          status: requirement?.status === 'Inactive' ? 'Inactive' : 'Active'
+        }))
+        .filter((requirement: any) => requirement.title)
+      : [];
+
+    const existing = manualId
+      ? await db.collection<any>('serviceManuals').findOne({ _id: manualId })
+      : null;
+    const id = existing?._id || manualId || crypto.randomUUID();
+    const updateDoc = {
+      title,
+      serviceID: String(req.body?.serviceID || '').trim(),
+      overview: String(req.body?.overview || '').trim(),
+      manualGuide: String(req.body?.manualGuide || '').trim(),
+      notes: String(req.body?.notes || '').trim(),
+      requirements,
+      lastUpdatedBy: userID,
+      lastUpdatedAt: now,
+      updatedAt: now,
+      ...(existing?.createdAt ? {} : { createdAt: now })
+    };
+
+    await db.collection<any>('serviceManuals').updateOne(
+      { _id: id },
+      { $set: updateDoc, $setOnInsert: { _id: id } },
+      { upsert: true }
+    );
+
+    const saved = await db.collection<any>('serviceManuals').findOne({ _id: id });
+    res.json({ success: true, manual: mapMongoServiceManual(saved) });
+  } catch (error: any) {
+    console.error('Save service manual error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/service-manuals/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'Manual ID is required' });
+    const db = await getMongoDb();
+    await db.collection<any>('serviceManuals').deleteOne({ _id: id });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Delete service manual error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -2020,9 +2160,10 @@ app.put('/api/retainers/:id', async (req, res) => {
       .map((row: any) => [`${toPaddedId(row.serviceID)}:${toPaddedId(row.taxID || '')}`, row.dueDate || '']));
     const beforeDeadlineMap = getDeadlineConfigMap(existingDeadlines);
     const afterDeadlineMap = new Map<string, string>();
-    if (isTaxComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
+    if (isMultiComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
       selectedTaxes.forEach((tax: any) => {
-        afterDeadlineMap.set(`${normalizedServiceId}:${toPaddedId(tax.taxID)}`, tax.dueDateCode || '');
+        const complianceItemId = normalizeComplianceItemId(normalizedServiceId, tax.taxID);
+        afterDeadlineMap.set(`${normalizedServiceId}:${complianceItemId}`, tax.dueDateCode || '');
       });
     } else if (dueDateCode) {
       afterDeadlineMap.set(`${normalizedServiceId}:`, dueDateCode);
@@ -2077,10 +2218,10 @@ app.put('/api/retainers/:id', async (req, res) => {
 
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Retainer not found' });
 
-    if (isTaxComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
+    if (isMultiComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
       const selectedTaxRows = selectedTaxes
         .map((tax: any) => ({
-          taxID: toPaddedId(tax.taxID),
+          taxID: normalizeComplianceItemId(normalizedServiceId, tax.taxID),
           dueDate: tax.dueDateCode,
         }))
         .filter((tax: any) => tax.taxID);
@@ -2088,7 +2229,7 @@ app.put('/api/retainers/:id', async (req, res) => {
       const existingByTaxId = new Map(
         existingDeadlines
           .filter((deadline: any) => toPaddedId(deadline.serviceID) === normalizedServiceId && deadline.taxID)
-          .map((deadline: any) => [toPaddedId(deadline.taxID), deadline])
+          .map((deadline: any) => [normalizeComplianceItemId(normalizedServiceId, deadline.taxID), deadline])
       );
 
       for (const tax of selectedTaxRows) {
@@ -2126,7 +2267,7 @@ app.put('/api/retainers/:id', async (req, res) => {
       }
 
       const removedDeadlineIds = existingDeadlines
-        .filter((deadline: any) => toPaddedId(deadline.serviceID) !== normalizedServiceId || !selectedTaxIds.has(toPaddedId(deadline.taxID)))
+        .filter((deadline: any) => toPaddedId(deadline.serviceID) !== normalizedServiceId || !selectedTaxIds.has(normalizeComplianceItemId(normalizedServiceId, deadline.taxID)))
         .map((deadline: any) => deadline._id);
       if (removedDeadlineIds.length > 0) {
         await deadlineCollection.updateMany(
@@ -2287,7 +2428,7 @@ app.post('/api/retainers', async (req, res) => {
 
       let deadlineRows = [];
 
-      if (isTaxComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
+      if (isMultiComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
         deadlineRows = selectedTaxes.map((tax: any) => {
           const deadlineID = newRecordId('dl');
           return {
@@ -2295,7 +2436,7 @@ app.post('/api/retainers', async (req, res) => {
             deadlineID,
             retainerID: retainerId,
             serviceID: normalizedServiceId,
-            taxID: tax.taxID,
+            taxID: normalizeComplianceItemId(normalizedServiceId, tax.taxID),
             dueDate: tax.dueDateCode,
             status: 'Active',
             createdAt: new Date(),
@@ -2711,19 +2852,25 @@ app.get('/api/audit-logs', async (req, res) => {
 
     if (search) {
       const regex = new RegExp(escapeRegExp(search), 'i');
-      const [matchedClients, matchedServices, matchedTaxes, matchedUsers] = await Promise.all([
+      const [matchedClients, matchedServices, matchedTaxes, matchedGovtContributions, matchedUsers] = await Promise.all([
         db.collection('clients').find({ clientName: regex }, { projection: { clientID: 1, _id: 1 } }).limit(25).toArray(),
         db.collection('services').find({ serviceName: regex }, { projection: { serviceID: 1, _id: 1 } }).limit(25).toArray(),
         db.collection('taxCompliances').find({
           $or: [{ complianceName: regex }, { complianceCode: regex }]
         }, { projection: { taxID: 1, _id: 1 } }).limit(25).toArray(),
+        db.collection('govtContributions').find({
+          $or: [{ complianceName: regex }, { complianceCode: regex }]
+        }, { projection: { _id: 1 } }).limit(25).toArray(),
         db.collection('users').find({
           $or: [{ firstName: regex }, { lastName: regex }, { userName: regex }, { email: regex }]
         }, { projection: { userID: 1, _id: 1 } }).limit(25).toArray()
       ]);
       const clientIds = matchedClients.flatMap((item: any) => userIdCandidates(item.clientID || item._id));
       const serviceIds = matchedServices.flatMap((item: any) => userIdCandidates(item.serviceID || item._id));
-      const taxIds = matchedTaxes.flatMap((item: any) => userIdCandidates(item.taxID || item._id));
+      const taxIds = [
+        ...matchedTaxes.flatMap((item: any) => userIdCandidates(item.taxID || item._id)),
+        ...matchedGovtContributions.flatMap((item: any) => userIdCandidates(item._id))
+      ];
       const userIds = matchedUsers.flatMap((item: any) => userIdCandidates(item.userID || item._id));
 
       andConditions.push({

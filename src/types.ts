@@ -213,6 +213,8 @@ export interface AppData {
   clients: Client[];
   deliverables: DeliverableLog[];
   services: Service[];
+  serviceManuals: ServiceManual[];
+  govtContributions: GovernmentContribution[];
   taxCompliances: ServiceTaxCompliance[];
   deadlines: RetainerDeadline[];
   retainerLogs: any[][];
@@ -230,11 +232,46 @@ export interface Service {
   type: string;
 }
 
+export interface ServiceRequirement {
+  id: string;
+  title: string;
+  description: string;
+  isRequired: boolean;
+  templateFileId?: string;
+  templateFileName?: string;
+  templateUrl?: string;
+  sortOrder: number;
+  status: 'Active' | 'Inactive';
+}
+
+export interface ServiceManual {
+  id: string;
+  serviceID: string;
+  title: string;
+  overview: string;
+  manualGuide: string;
+  notes: string;
+  requirements: ServiceRequirement[];
+  lastUpdatedBy?: string;
+  lastUpdatedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface ServiceTaxCompliance {
   taxID: string;
   complianceName: string;
   complianceCode: string;
   frequency: 'Monthly' | 'Quarterly' | 'Annual';
+}
+
+export interface GovernmentContribution {
+  id: string;
+  complianceName: string;
+  complianceCode: string;
+  frequency: 'Monthly';
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface RetainerDeadline {

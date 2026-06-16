@@ -60,17 +60,19 @@ const computeActualDueDate = (monthStr: string, yearStr: string, code: string, f
     const monthIndex = months.indexOf(monthStr);
     if (monthIndex === -1) return { formatted: 'N/A', raw: new Date() };
 
-    const match = code.match(/([MQYA])\+(\d+)([DM])/);
+    const match = String(code || '').trim().match(/^(SM|[MQYA])([+-])([+-]?\d+)([DM])$/i);
     if (!match) return { formatted: 'N/A', raw: new Date() };
 
-    const type = match[1];
-    const val = parseInt(match[2]);
-    const unit = match[3];
+    const type = match[1].toUpperCase();
+    const offsetSign = match[2] === '-' ? -1 : 1;
+    const signedValue = parseInt(match[3], 10);
+    const val = Math.abs(signedValue) * (signedValue < 0 ? -1 : offsetSign);
+    const unit = match[4].toUpperCase();
 
     const year = parseInt(yearStr);
     let date: Date;
 
-    if (type === 'M' || type === 'Q') {
+    if (type === 'M' || type === 'Q' || type === 'SM') {
         date = new Date(year, monthIndex + 1, 0);
     } else {
         const [fyM, fyD] = (fiscalYearEnd || '12/31').split('/').map(Number);

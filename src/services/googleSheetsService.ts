@@ -1,5 +1,5 @@
 
-import { User, AppData, RetainerEngagement, SpecialEngagement, TaxCompliance, Client, UserRole, ClientCredential, Service, Transmittal, Meeting, Notification, DeliverableLog, ChatThread, ChatMessage, ChatMention } from '../types';
+import { User, AppData, RetainerEngagement, SpecialEngagement, TaxCompliance, Client, UserRole, ClientCredential, Service, ServiceManual, GovernmentContribution, Transmittal, Meeting, Notification, DeliverableLog, ChatThread, ChatMessage, ChatMention } from '../types';
 
 
 // --- Shared Utilities ---
@@ -148,6 +148,8 @@ export const fetchAllData = async (): Promise<AppData> => {
     );
 
     const taxCompliances = (rawData.taxCompliances || []).map((row: any[]) => mapRow(row, ['taxID', 'complianceName', 'complianceCode', 'frequency']));
+    const govtContributions = (rawData.govtContributions || []) as GovernmentContribution[];
+    const serviceManuals = (rawData.serviceManuals || []) as ServiceManual[];
     const deadlines = (rawData.deadlines || []).map((row: any[]) => mapRow(row, ['deadlineID', 'retainerID', 'serviceID', 'taxID', 'dueDate']));
 
     const retainerLogs = rawData.retainerLogs || [];
@@ -159,7 +161,7 @@ export const fetchAllData = async (): Promise<AppData> => {
     const notifications = (rawData.notifications || []) as Notification[];
 
     return {
-        retainers, specials, taxes, users, clients, deliverables, services,
+        retainers, specials, taxes, users, clients, deliverables, services, serviceManuals, govtContributions,
         taxCompliances, deadlines, retainerLogs, taskLog, activityLog,
         credentials, transmittals, meetings, notifications
     };
@@ -167,7 +169,7 @@ export const fetchAllData = async (): Promise<AppData> => {
 
 export const logout = () => apiCall('/api/logout', { method: 'POST' });
 
-export const uploadFile = (file: File, type: 'Transmittal' | 'Meeting') => {
+export const uploadFile = (file: File, type: 'Transmittal' | 'Meeting' | 'Library') => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('type', type);
@@ -257,6 +259,17 @@ export const updateChatThreadSettings = (data: { threadId: string; userId: strin
     apiCall<{ success: boolean; thread: ChatThread }>('/api/chat/thread-settings', {
         method: 'PUT',
         body: JSON.stringify(data)
+    });
+
+export const saveServiceManual = (data: Partial<ServiceManual> & { title: string; userID?: string }) =>
+    apiCall<{ success: boolean; manual: ServiceManual }>('/api/service-manuals', {
+        method: 'PUT',
+        body: JSON.stringify(data)
+    });
+
+export const deleteServiceManual = (id: string) =>
+    apiCall<{ success: boolean }>(`/api/service-manuals/${encodeURIComponent(id)}`, {
+        method: 'DELETE'
     });
 
 export const addClient = (clientData: Omit<Client, 'id'>) =>

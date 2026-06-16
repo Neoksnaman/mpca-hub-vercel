@@ -738,6 +738,9 @@ const Engagements: React.FC = () => {
         const taxById = new Map<string, any>();
         (context?.taxCompliances || []).forEach(tc => taxById.set(normalizeId(tc.taxID), tc));
 
+        const govtById = new Map<string, any>();
+        (context?.govtContributions || []).forEach(gc => govtById.set(normalizeId(gc.id), gc));
+
         const serviceById = new Map<string, any>();
         (context?.services || []).forEach(s => serviceById.set(normalizeId(s.id), s));
 
@@ -751,8 +754,8 @@ const Engagements: React.FC = () => {
         const retainerLogByDeadlinePeriod = new Map<string, any[]>();
         retainerLogs.forEach(l => retainerLogByDeadlinePeriod.set(`${normalizeId(l[0])}|${l[1]}`, l));
 
-        return { retainerById, clientById, taxById, serviceById, userByName, retainerLogByDeadlinePeriod };
-    }, [retainers, clients, context?.taxCompliances, context?.services, allUsers, retainerLogs]);
+        return { retainerById, clientById, taxById, govtById, serviceById, userByName, retainerLogByDeadlinePeriod };
+    }, [retainers, clients, context?.taxCompliances, context?.govtContributions, context?.services, allUsers, retainerLogs]);
 
     const formatSpecialAuditDetailValue = useCallback((key: string, value: any) => {
         const text = formatAuditDetailValue(value);
@@ -903,7 +906,12 @@ const Engagements: React.FC = () => {
             if (!client || client.status === 'Inactive') return null;
             if (isPeriodBeforeRetainerStart(retainer.startDate, currentMonth, currentYear)) return null;
 
-            const compliance = d.taxID ? lookupMaps.taxById.get(normalizeId(d.taxID)) : null;
+            const normalizedServiceID = normalizeId(d.serviceID);
+            const compliance = d.taxID
+                ? (normalizedServiceID === '2'
+                    ? lookupMaps.govtById.get(normalizeId(d.taxID))
+                    : lookupMaps.taxById.get(normalizeId(d.taxID)))
+                : null;
             const service = !d.taxID ? lookupMaps.serviceById.get(normalizeId(d.serviceID)) : null;
 
             const complianceName = compliance?.complianceName || service?.name || 'General Compliance';
@@ -1054,7 +1062,12 @@ const Engagements: React.FC = () => {
                     if (monthIdx !== fyMonth) return null;
                 }
 
-                const compliance = d.taxID ? lookupMaps.taxById.get(normalizeId(d.taxID)) : null;
+                const normalizedServiceID = normalizeId(d.serviceID);
+                const compliance = d.taxID
+                    ? (normalizedServiceID === '2'
+                        ? lookupMaps.govtById.get(normalizeId(d.taxID))
+                        : lookupMaps.taxById.get(normalizeId(d.taxID)))
+                    : null;
                 const service = !d.taxID ? lookupMaps.serviceById.get(normalizeId(d.serviceID)) : null;
                 return compliance?.complianceCode || service?.name || d.serviceID;
             }).filter(Boolean)

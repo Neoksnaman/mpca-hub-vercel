@@ -1,6 +1,6 @@
 
 import { UserRole, Status, Task, EngagementCategory } from './types';
-import { Home, Users, CheckSquare, FileText, Briefcase, BarChart2, Settings } from 'lucide-react';
+import { Home, Users, CheckSquare, FileText, Briefcase, BarChart2, Settings, BookOpen } from 'lucide-react';
 
 export const MOCK_USER: any = {
   id: 'user-1',
@@ -148,6 +148,7 @@ export const NAV_LINKS = [
       { name: 'Meetings', path: '/meetings', icon: Users },
     ],
   },
+  { name: 'Library', path: '/library', icon: BookOpen },
   { name: 'Reports', path: '/reports', icon: BarChart2 },
   { name: 'Settings', path: '/settings', icon: Settings },
 ];

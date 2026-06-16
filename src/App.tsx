@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard';
 import Clients from './pages/Clients';
 import Engagements from './pages/Engagements';
 import Operations from './pages/Operations';
+import Library from './pages/Library';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import LoginPage from './components/LoginPage';
@@ -57,6 +58,8 @@ const App: React.FC = () => {
     clients: [],
     deliverables: [],
     services: [],
+    serviceManuals: [],
+    govtContributions: [],
     taxCompliances: [],
     deadlines: [],
     retainerLogs: [],
@@ -334,6 +337,7 @@ const App: React.FC = () => {
                   <Route path="/operations" element={user ? <Navigate to="/transmittals" replace /> : <Navigate to="/login" />} />
                   <Route path="/transmittals" element={user ? <Operations /> : <Navigate to="/login" />} />
                   <Route path="/meetings" element={user ? <Operations /> : <Navigate to="/login" />} />
+                  <Route path="/library" element={user ? <Library /> : <Navigate to="/login" />} />
                   <Route path="/reports" element={user ? (user.role === 'Admin' ? <Reports /> : <Navigate to="/" />) : <Navigate to="/login" />} />
                   <Route path="/settings" element={user ? <Settings /> : <Navigate to="/login" />} />
                 </Routes>

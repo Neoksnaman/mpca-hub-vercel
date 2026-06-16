@@ -191,6 +191,17 @@ const Settings: React.FC = () => {
         return map;
     }, [context.taxCompliances]);
 
+    const govtById = useMemo(() => {
+        const map = new Map<string, any>();
+        (context.govtContributions || []).forEach((item: any) => {
+            [item.id, item._id].filter(Boolean).forEach((id) => {
+                map.set(String(id), item);
+                map.set(normalizeAuditId(id), item);
+            });
+        });
+        return map;
+    }, [context.govtContributions]);
+
     const userById = useMemo(() => {
         const map = new Map<string, any>();
         (allUsers || []).forEach((member: any) => {
@@ -272,7 +283,9 @@ const Settings: React.FC = () => {
             return text.split(' | ').map((entry) => {
                 const [serviceId, taxId, dueDate] = entry.split(':');
                 const service = serviceById.get(serviceId) || serviceById.get(normalizeAuditId(serviceId));
-                const tax = taxById.get(taxId) || taxById.get(normalizeAuditId(taxId));
+                const tax = normalizeAuditId(serviceId) === '2'
+                    ? (govtById.get(taxId) || govtById.get(normalizeAuditId(taxId)))
+                    : (taxById.get(taxId) || taxById.get(normalizeAuditId(taxId)));
                 const label = tax?.complianceName || tax?.complianceCode || service?.name || service?.serviceName || serviceId;
                 return dueDate ? `${label} - ${dueDate}` : label;
             }).join('; ');
