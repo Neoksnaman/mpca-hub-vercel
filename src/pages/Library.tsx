@@ -14,7 +14,7 @@ import {
     X
 } from 'lucide-react';
 import { AppContext } from '../App';
-import { ServiceManual, ServiceRequirement, UserRole } from '../types';
+import { ServiceManual, ServiceRequirement } from '../types';
 import { deleteServiceManual, normalizeId, saveServiceManual, uploadFile } from '../services/googleSheetsService';
 
 const emptyManual = (): ServiceManual => ({
@@ -54,6 +54,53 @@ const getDriveUrl = (idOrUrl?: string) => {
     return `https://drive.google.com/file/d/${idOrUrl}/view?usp=sharing`;
 };
 
+const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, isDeleting }: any) => {
+    if (!isOpen) return null;
+    return createPortal(
+        <div className="fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-rose-100 dark:border-rose-900/30 w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200">
+                <div className="p-6 text-center">
+                    <div className="w-16 h-16 bg-rose-100 dark:bg-rose-900/30 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-600 dark:text-rose-400">
+                        <Trash2 size={32} />
+                    </div>
+
+                    <h3 className="text-lg font-bold text-neutral-dark dark:text-white mb-2">
+                        {title}
+                    </h3>
+                    <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+                        {message}
+                    </p>
+
+                    <div className="flex gap-3">
+                        <button
+                            onClick={onClose}
+                            disabled={isDeleting}
+                            className="flex-1 px-4 py-2.5 rounded-xl text-sm font-bold text-secondary hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={onConfirm}
+                            disabled={isDeleting}
+                            className="flex-1 px-4 py-2.5 bg-rose-600 text-white rounded-xl text-sm font-bold hover:bg-rose-700 shadow-lg shadow-rose-600/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                        >
+                            {isDeleting ? (
+                                <>
+                                    <Loader2 size={16} className="animate-spin" />
+                                    Deleting...
+                                </>
+                            ) : (
+                                'Yes, Delete'
+                            )}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
+};
+
 const Library: React.FC = () => {
     const context = useContext(AppContext);
     const manuals = context?.serviceManuals || [];
@@ -66,8 +113,41 @@ const Library: React.FC = () => {
     const [isSaving, setIsSaving] = useState(false);
     const [deletingId, setDeletingId] = useState<string | null>(null);
     const [uploadingRequirementId, setUploadingRequirementId] = useState<string | null>(null);
+    const [deleteModal, setDeleteModal] = useState<{
+        isOpen: boolean;
+        title: string;
+        message: string;
+        onConfirm: () => Promise<void>;
+        isDeleting: boolean;
+    }>({
+        isOpen: false,
+        title: '',
+        message: '',
+        onConfirm: async () => {},
+        isDeleting: false
+    });
 
-    const canEdit = [UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPERVISOR].includes(currentUser?.role as UserRole);
+    const closeDeleteModal = () => setDeleteModal(prev => ({ ...prev, isOpen: false, isDeleting: false }));
+
+    const openDeleteModal = (title: string, message: string, onConfirm: () => Promise<void>) => {
+        setDeleteModal({
+            isOpen: true,
+            title,
+            message,
+            onConfirm: async () => {
+                setDeleteModal(prev => ({ ...prev, isDeleting: true }));
+                try {
+                    await onConfirm();
+                    closeDeleteModal();
+                } catch (e) {
+                    setDeleteModal(prev => ({ ...prev, isDeleting: false }));
+                }
+            },
+            isDeleting: false
+        });
+    };
+
+    const canEdit = !!currentUser;
 
     const userById = useMemo(() => {
         const lookup = new Map<string, string>();
@@ -171,22 +251,26 @@ const Library: React.FC = () => {
         }
     };
 
-    const handleDelete = async (manual: ServiceManual) => {
+    const handleDelete = (manual: ServiceManual) => {
         if (!manual.id) return;
-        const confirmed = window.confirm(`Delete "${manual.title || 'this manual'}" from the Library?`);
-        if (!confirmed) return;
-
-        try {
-            setDeletingId(manual.id);
-            await deleteServiceManual(manual.id);
-            context?.showToast('Service manual deleted.', 'success');
-            if (selectedManualId === manual.id) closeDrawer();
-            await context?.refreshData(true);
-        } catch (error: any) {
-            context?.showToast(error.message || 'Unable to delete service manual.', 'error');
-        } finally {
-            setDeletingId(null);
-        }
+        openDeleteModal(
+            'Delete Service Manual?',
+            `Are you sure you want to delete "${manual.title || 'this manual'}" from the Library? This action cannot be undone.`,
+            async () => {
+                try {
+                    setDeletingId(manual.id);
+                    await deleteServiceManual(manual.id);
+                    context?.showToast('Service manual deleted.', 'success');
+                    if (selectedManualId === manual.id) closeDrawer();
+                    await context?.refreshData(true);
+                } catch (error: any) {
+                    context?.showToast(error.message || 'Unable to delete service manual.', 'error');
+                    throw error;
+                } finally {
+                    setDeletingId(null);
+                }
+            }
+        );
     };
 
     const selectedManual = draftManual;
@@ -481,6 +565,11 @@ const Library: React.FC = () => {
             </div>
 
             {drawer && createPortal(drawer, document.body)}
+
+            <DeleteConfirmationModal
+                {...deleteModal}
+                onClose={closeDeleteModal}
+            />
         </div>
     );
 };
