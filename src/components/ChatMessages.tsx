@@ -1142,7 +1142,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                               </p>
                             </div>
                           ) : (
-                            <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap">{renderMessageText(message, mine)}</p>
+                            <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap break-words">{renderMessageText(message, mine)}</p>
                           )}
                           <p className={`text-[9px] font-bold mt-1 ${mine ? 'text-right text-white/70' : 'text-secondary/60'}`}>{formatTime(message.createdAt)}</p>
                         </div>
