@@ -92,6 +92,27 @@ const getRefSortValue = (ref: string) => {
     return match ? Number(match.join('')) : 0;
 };
 
+const getTransmittalClientName = (clientID: any, clientById: Map<string, any>) => {
+    const text = String(clientID || '').trim();
+    if (!text) return 'Unknown Client';
+    const client = clientById.get(normalizeId(text)) as any;
+    return client?.name || text;
+};
+
+const getTransmittalClientForPrint = (clientID: any, clientById: Map<string, any>) => {
+    const text = String(clientID || '').trim();
+    const client = clientById.get(normalizeId(text)) as any;
+    return client || {
+        id: text,
+        name: text,
+        contactPerson: '',
+        email: '',
+        tin: '',
+        entityType: '',
+        fiscalYearEnd: ''
+    };
+};
+
 const TablePagination = ({ currentPage, totalPages, startIndex, itemsPerPage, totalItems, setCurrentPage }: any) => {
     if (totalPages <= 1) return null;
 
@@ -735,6 +756,7 @@ const ClientSearchableSelect = ({ clients, value, onChange }: any) => {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const trimmedSearch = search.trim();
 
     const sortedClients = useMemo(() => {
         return [...clients].sort((a, b) => a.name.localeCompare(b.name));
@@ -746,6 +768,7 @@ const ClientSearchableSelect = ({ clients, value, onChange }: any) => {
     }, [sortedClients, search]);
 
     const selectedClient = clients.find((c: any) => normalizeId(c.id) === normalizeId(value));
+    const selectedManualValue = !selectedClient ? String(value || '').trim() : '';
 
     React.useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -763,8 +786,8 @@ const ClientSearchableSelect = ({ clients, value, onChange }: any) => {
                 onClick={() => setIsOpen(!isOpen)}
                 className="w-full px-4 py-2 bg-neutral-light/50 dark:bg-gray-900 border border-neutral-medium dark:border-gray-700 rounded-xl text-xs font-bold focus:ring-4 focus:ring-primary/5 outline-none transition-all cursor-pointer flex items-center justify-between"
             >
-                <span className={selectedClient ? "text-neutral-dark dark:text-white" : "text-secondary/50 font-medium"}>
-                    {selectedClient ? selectedClient.name : "Select a client..."}
+                <span className={selectedClient || selectedManualValue ? "text-neutral-dark dark:text-white truncate" : "text-secondary/50 font-medium"}>
+                    {selectedClient ? selectedClient.name : selectedManualValue || "Select a client..."}
                 </span>
                 <ChevronDown size={14} className={`text-secondary transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
             </div>
@@ -787,7 +810,23 @@ const ClientSearchableSelect = ({ clients, value, onChange }: any) => {
                     </div>
                     <div className="max-h-[200px] overflow-y-auto custom-scrollbar p-1">
                         {filteredClients.length === 0 ? (
-                            <div className="px-3 py-4 text-center text-xs text-secondary/50">No clients found</div>
+                            <div className="space-y-1 px-1 py-2">
+                                <div className="px-3 py-2 text-center text-xs text-secondary/50">No clients found</div>
+                                {trimmedSearch && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            onChange(trimmedSearch);
+                                            setIsOpen(false);
+                                            setSearch('');
+                                        }}
+                                        className="w-full text-left px-3 py-2.5 rounded-lg text-xs font-black text-primary bg-primary/5 hover:bg-primary/10 border border-primary/10 transition-all"
+                                    >
+                                        Use manual entity: "{trimmedSearch}"
+                                        <span className="block text-[9px] font-bold text-secondary/70 mt-0.5">This will not create a client profile.</span>
+                                    </button>
+                                )}
+                            </div>
                         ) : (
                             filteredClients.map((c: any) => (
                                 <div
@@ -1154,8 +1193,8 @@ const TransmittalSection = ({
         }
         const query = searchQuery.toLowerCase();
         return personalHistory.filter((t: any) => {
-            const client = clientById.get(normalizeId(t.clientID)) as any;
-            return (client?.name?.toLowerCase().includes(query) ||
+            const clientName = getTransmittalClientName(t.clientID, clientById);
+            return (clientName.toLowerCase().includes(query) ||
                    t.items?.toLowerCase().includes(query) ||
                    formatDateForUI(t.date).toLowerCase().includes(query));
         }).sort((a: any, b: any) => getRefSortValue(b.transmittalID) - getRefSortValue(a.transmittalID));
@@ -1323,7 +1362,7 @@ const TransmittalSection = ({
                             </thead>
                             <tbody className="divide-y divide-neutral-medium/30 dark:divide-gray-700/50">
                 {paginatedHistory.map((t: any) => {
-                                    const client = clientById.get(normalizeId(t.clientID)) as any;
+                                    const clientName = getTransmittalClientName(t.clientID, clientById);
                                     const staffMember = staffById.get(normalizeId(t.userID)) as any;
                                     const itemsCount = t.items?.split('||').length || 0;
 
@@ -1335,7 +1374,7 @@ const TransmittalSection = ({
                                         >
                                             <td className="px-5 py-2.5 font-mono text-[11px] font-black text-primary">#{t.transmittalID}</td>
                                             <td className="px-5 py-2.5">
-                                                <span className="text-[13px] font-black text-neutral-dark dark:text-white truncate block max-w-[200px] group-hover:text-primary transition-colors">{client?.name || 'Unknown Client'}</span>
+                                                <span className="text-[13px] font-black text-neutral-dark dark:text-white truncate block max-w-[200px] group-hover:text-primary transition-colors">{clientName}</span>
                                             </td>
                                             <td className="px-5 py-2.5">
                                                 <span className="text-[11px] font-bold text-secondary dark:text-gray-300">{itemsCount} items</span>
@@ -1420,7 +1459,7 @@ const TransmittalSection = ({
                                 <div>
                                     <div className="flex items-center gap-3 mb-1">
                                         <h2 className="text-xl font-black text-neutral-dark dark:text-white tracking-tight leading-tight">
-                                            {(clientById.get(normalizeId(selectedItem.clientID)) as any)?.name || 'Client Details'}
+                                            {getTransmittalClientName(selectedItem.clientID, clientById)}
                                         </h2>
                                         {selectedItem.receiptUrl ? (
                                             <div className="px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-[0.15em] border flex items-center gap-1.5 shadow-sm bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20">
@@ -1477,7 +1516,7 @@ const TransmittalSection = ({
                             <TransmittalPrintTemplate
                                 ref={printRef}
                                 transmittal={selectedItem}
-                                client={clientById.get(normalizeId(selectedItem?.clientID))}
+                                client={getTransmittalClientForPrint(selectedItem?.clientID, clientById)}
                                 staffMember={staffById.get(normalizeId(selectedItem?.userID))}
                                 logoUrl="/logo.png"
                             />

@@ -59,6 +59,7 @@ const App: React.FC = () => {
     deliverables: [],
     services: [],
     serviceManuals: [],
+    serviceSubItems: [],
     govtContributions: [],
     taxCompliances: [],
     deadlines: [],

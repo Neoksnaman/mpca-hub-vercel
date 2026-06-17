@@ -741,6 +741,12 @@ const Engagements: React.FC = () => {
         const govtById = new Map<string, any>();
         (context?.govtContributions || []).forEach(gc => govtById.set(normalizeId(gc.id), gc));
 
+        const serviceSubItemByServiceAndId = new Map<string, any>();
+        (context?.serviceSubItems || []).forEach(item => {
+            const itemId = String(item.subItemID || item.id || item._id || '').trim();
+            serviceSubItemByServiceAndId.set(`${normalizeId(item.serviceID)}:${normalizeId(itemId)}`, item);
+        });
+
         const serviceById = new Map<string, any>();
         (context?.services || []).forEach(s => serviceById.set(normalizeId(s.id), s));
 
@@ -754,8 +760,8 @@ const Engagements: React.FC = () => {
         const retainerLogByDeadlinePeriod = new Map<string, any[]>();
         retainerLogs.forEach(l => retainerLogByDeadlinePeriod.set(`${normalizeId(l[0])}|${l[1]}`, l));
 
-        return { retainerById, clientById, taxById, govtById, serviceById, userByName, retainerLogByDeadlinePeriod };
-    }, [retainers, clients, context?.taxCompliances, context?.govtContributions, context?.services, allUsers, retainerLogs]);
+        return { retainerById, clientById, taxById, govtById, serviceSubItemByServiceAndId, serviceById, userByName, retainerLogByDeadlinePeriod };
+    }, [retainers, clients, context?.taxCompliances, context?.govtContributions, context?.serviceSubItems, context?.services, allUsers, retainerLogs]);
 
     const formatSpecialAuditDetailValue = useCallback((key: string, value: any) => {
         const text = formatAuditDetailValue(value);
@@ -908,13 +914,14 @@ const Engagements: React.FC = () => {
 
             const normalizedServiceID = normalizeId(d.serviceID);
             const compliance = d.taxID
-                ? (normalizedServiceID === '2'
-                    ? lookupMaps.govtById.get(normalizeId(d.taxID))
-                    : lookupMaps.taxById.get(normalizeId(d.taxID)))
+                ? (lookupMaps.serviceSubItemByServiceAndId.get(`${normalizedServiceID}:${normalizeId(d.taxID)}`)
+                    || (normalizedServiceID === '2'
+                        ? lookupMaps.govtById.get(normalizeId(d.taxID))
+                        : lookupMaps.taxById.get(normalizeId(d.taxID))))
                 : null;
             const service = !d.taxID ? lookupMaps.serviceById.get(normalizeId(d.serviceID)) : null;
 
-            const complianceName = compliance?.complianceName || service?.name || 'General Compliance';
+            const complianceName = compliance?.name || compliance?.complianceName || service?.name || 'General Compliance';
 
             // Frequency Check: Should this show up in this month?
             const frequency = d.dueDate.startsWith('M') ? 'Monthly' :
@@ -979,7 +986,7 @@ const Engagements: React.FC = () => {
                 dateFiled: match?.[2] || null,
                 remarks: match?.[3] || '',
                 assignedStaff: retainer.assignedStaff,
-                complianceCode: compliance?.complianceCode || service?.name || d.serviceID,
+                complianceCode: compliance?.code || compliance?.complianceCode || service?.name || d.serviceID,
                 frequency: frequency,
                 dueDateCode: d.dueDate,
                 taxID: d.taxID
@@ -1064,12 +1071,13 @@ const Engagements: React.FC = () => {
 
                 const normalizedServiceID = normalizeId(d.serviceID);
                 const compliance = d.taxID
-                    ? (normalizedServiceID === '2'
-                        ? lookupMaps.govtById.get(normalizeId(d.taxID))
-                        : lookupMaps.taxById.get(normalizeId(d.taxID)))
+                    ? (lookupMaps.serviceSubItemByServiceAndId.get(`${normalizedServiceID}:${normalizeId(d.taxID)}`)
+                        || (normalizedServiceID === '2'
+                            ? lookupMaps.govtById.get(normalizeId(d.taxID))
+                            : lookupMaps.taxById.get(normalizeId(d.taxID))))
                     : null;
                 const service = !d.taxID ? lookupMaps.serviceById.get(normalizeId(d.serviceID)) : null;
-                return compliance?.complianceCode || service?.name || d.serviceID;
+                return compliance?.code || compliance?.complianceCode || service?.name || d.serviceID;
             }).filter(Boolean)
         )).sort();
     }, [activeTab, context?.deadlines, lookupMaps, retainerFilter.month, retainerFilter.year, retainerFilter.client, isAssignedVisible, calendarOnlyTaxIDs]);

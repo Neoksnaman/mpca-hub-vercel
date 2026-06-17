@@ -151,6 +151,10 @@ const Dashboard: React.FC = () => {
         const taskById = new Map<string, ProjectTask>((context?.taskLog || []).map(t => [normalizeId(t.taskID), t]));
         const specialById = new Map<string, SpecialEngagement>(specials.map(s => [normalizeId(s.id), s]));
         const taxById = new Map<string, any>((context?.taxCompliances || []).map((t: any) => [normalizeId(t.taxID), t]));
+        const serviceSubItemByServiceAndId = new Map<string, any>((context?.serviceSubItems || []).map((item: any) => [
+            `${normalizeId(item.serviceID)}:${normalizeId(item.subItemID || item.id || item._id)}`,
+            item
+        ]));
         const serviceById = new Map<string, any>((context?.services || []).map((s: any) => [normalizeId(s.id), s]));
 
         // Filter helper for RBAC
@@ -212,7 +216,10 @@ const Dashboard: React.FC = () => {
                 compareDue.setHours(12, 0, 0, 0);
                 status = filedDate > compareDue ? 'LATE' : 'Filed';
             }
-            const tax = d.taxID ? taxById.get(normalizeId(d.taxID)) : null;
+            const normalizedServiceID = normalizeId(d.serviceID);
+            const tax = d.taxID
+                ? (serviceSubItemByServiceAndId.get(`${normalizedServiceID}:${normalizeId(d.taxID)}`) || taxById.get(normalizeId(d.taxID)))
+                : null;
             const service = !d.taxID ? serviceById.get(normalizeId(d.serviceID)) : null;
 
             return {
@@ -220,7 +227,7 @@ const Dashboard: React.FC = () => {
                 status,
                 staff: retainer.assignedStaff,
                 clientName: client.name,
-                title: tax?.complianceName || service?.name || 'General Compliance',
+                title: tax?.name || tax?.complianceName || service?.name || 'General Compliance',
                 dueDate: dueInfo.formatted,
                 rawDueDate: dueInfo.raw
             };
@@ -358,7 +365,7 @@ const Dashboard: React.FC = () => {
             recentActivity,
             needsAttention
         };
-    }, [clients, retainers, specials, deadlines, retainerLogs, allUsers, currentMonth, currentYear, user, context?.activityLog, context?.taskLog, context?.taxCompliances, context?.services]);
+    }, [clients, retainers, specials, deadlines, retainerLogs, allUsers, currentMonth, currentYear, user, context?.activityLog, context?.taskLog, context?.taxCompliances, context?.serviceSubItems, context?.services]);
 
     const filingRate = dashboardData.filingStats.total > 0 ? Math.round((dashboardData.filingStats.filed / dashboardData.filingStats.total) * 100) : 100;
     const topWorkload = dashboardData.staffWorkload.slice(0, 8);

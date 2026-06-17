@@ -202,6 +202,17 @@ const Settings: React.FC = () => {
         return map;
     }, [context.govtContributions]);
 
+    const serviceSubItemByServiceAndId = useMemo(() => {
+        const map = new Map<string, any>();
+        (context.serviceSubItems || []).forEach((item: any) => {
+            const subItemID = String(item.subItemID || item.id || item._id || '').trim();
+            if (!subItemID) return;
+            map.set(`${normalizeAuditId(item.serviceID)}:${normalizeAuditId(subItemID)}`, item);
+            map.set(`${String(item.serviceID)}:${subItemID}`, item);
+        });
+        return map;
+    }, [context.serviceSubItems]);
+
     const userById = useMemo(() => {
         const map = new Map<string, any>();
         (allUsers || []).forEach((member: any) => {
@@ -283,10 +294,12 @@ const Settings: React.FC = () => {
             return text.split(' | ').map((entry) => {
                 const [serviceId, taxId, dueDate] = entry.split(':');
                 const service = serviceById.get(serviceId) || serviceById.get(normalizeAuditId(serviceId));
-                const tax = normalizeAuditId(serviceId) === '2'
+                const subItem = serviceSubItemByServiceAndId.get(`${normalizeAuditId(serviceId)}:${normalizeAuditId(taxId)}`)
+                    || serviceSubItemByServiceAndId.get(`${serviceId}:${taxId}`);
+                const tax = subItem || (normalizeAuditId(serviceId) === '2'
                     ? (govtById.get(taxId) || govtById.get(normalizeAuditId(taxId)))
-                    : (taxById.get(taxId) || taxById.get(normalizeAuditId(taxId)));
-                const label = tax?.complianceName || tax?.complianceCode || service?.name || service?.serviceName || serviceId;
+                    : (taxById.get(taxId) || taxById.get(normalizeAuditId(taxId))));
+                const label = tax?.name || tax?.complianceName || tax?.code || tax?.complianceCode || service?.name || service?.serviceName || serviceId;
                 return dueDate ? `${label} - ${dueDate}` : label;
             }).join('; ');
         }

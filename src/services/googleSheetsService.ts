@@ -1,5 +1,5 @@
 
-import { User, AppData, RetainerEngagement, SpecialEngagement, TaxCompliance, Client, UserRole, ClientCredential, Service, ServiceManual, GovernmentContribution, Transmittal, Meeting, Notification, DeliverableLog, ChatThread, ChatMessage, ChatMention } from '../types';
+import { User, AppData, RetainerEngagement, SpecialEngagement, TaxCompliance, Client, UserRole, ClientCredential, Service, ServiceManual, ServiceSubItem, GovernmentContribution, Transmittal, Meeting, Notification, DeliverableLog, ChatThread, ChatMessage, ChatMention } from '../types';
 
 
 // --- Shared Utilities ---
@@ -148,6 +148,7 @@ export const fetchAllData = async (): Promise<AppData> => {
     );
 
     const taxCompliances = (rawData.taxCompliances || []).map((row: any[]) => mapRow(row, ['taxID', 'complianceName', 'complianceCode', 'frequency']));
+    const serviceSubItems = (rawData.serviceSubItems || []) as ServiceSubItem[];
     const govtContributions = (rawData.govtContributions || []) as GovernmentContribution[];
     const serviceManuals = (rawData.serviceManuals || []) as ServiceManual[];
     const deadlines = (rawData.deadlines || []).map((row: any[]) => mapRow(row, ['deadlineID', 'retainerID', 'serviceID', 'taxID', 'dueDate']));
@@ -161,7 +162,7 @@ export const fetchAllData = async (): Promise<AppData> => {
     const notifications = (rawData.notifications || []) as Notification[];
 
     return {
-        retainers, specials, taxes, users, clients, deliverables, services, serviceManuals, govtContributions,
+        retainers, specials, taxes, users, clients, deliverables, services, serviceManuals, serviceSubItems, govtContributions,
         taxCompliances, deadlines, retainerLogs, taskLog, activityLog,
         credentials, transmittals, meetings, notifications
     };

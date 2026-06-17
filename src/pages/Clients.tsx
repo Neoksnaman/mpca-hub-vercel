@@ -63,6 +63,46 @@ const formatDeadlineCode = (parts: { frequency?: string; sign?: string; value?: 
     return `${parts.frequency || 'M'}${parts.sign === '-' ? '-' : '+'}${value}${parts.unit || 'D'}`;
 };
 
+const getSubItemId = (item: any) => String(item?.subItemID || item?.taxID || item?.id || item?._id || '').trim();
+const getSubItemCode = (item: any) => item?.code || item?.complianceCode || '';
+const getSubItemName = (item: any) => item?.name || item?.complianceName || '';
+
+const getServiceSubItems = (context: any, serviceId: any) => {
+    const normalizedServiceId = normalizeId(serviceId);
+    const genericItems = (context?.serviceSubItems || [])
+        .filter((item: any) => normalizeId(item.serviceID) === normalizedServiceId)
+        .map((item: any) => ({
+            ...item,
+            id: getSubItemId(item),
+            complianceCode: getSubItemCode(item),
+            complianceName: getSubItemName(item)
+        }));
+
+    if (genericItems.length > 0) return genericItems;
+
+    if (normalizedServiceId === '1') {
+        return (context?.taxCompliances || []).map((item: any) => ({
+            ...item,
+            id: getSubItemId(item),
+            serviceID: '0001',
+            complianceCode: getSubItemCode(item),
+            complianceName: getSubItemName(item)
+        }));
+    }
+
+    if (normalizedServiceId === '2') {
+        return (context?.govtContributions || []).map((item: any) => ({
+            ...item,
+            id: getSubItemId(item),
+            serviceID: '0002',
+            complianceCode: getSubItemCode(item),
+            complianceName: getSubItemName(item)
+        }));
+    }
+
+    return [];
+};
+
 // --- Sub-components to reduce duplication ---
 
 const TaxComplianceRows = ({
@@ -71,7 +111,7 @@ const TaxComplianceRows = ({
     context,
     targetClientId,
     existingTaxIds,
-    mode = 'tax'
+    serviceId
 }: {
     key?: React.Key,
     assignment: any,
@@ -79,13 +119,12 @@ const TaxComplianceRows = ({
     context: any,
     targetClientId: string,
     existingTaxIds: Set<string>,
-    mode?: 'tax' | 'govt'
+    serviceId: string
 }) => {
-    const complianceItems = mode === 'govt' ? (context?.govtContributions || []) : (context?.taxCompliances || []);
-    const idKey = mode === 'govt' ? 'id' : 'taxID';
-    const title = mode === 'govt' ? 'Required Government Contributions' : 'Required Compliances';
-    const emptyText = mode === 'govt' ? 'No government contributions added yet.' : 'No compliances added yet.';
-    const addLabel = mode === 'govt' ? 'Add Contribution' : 'Add Compliance';
+    const complianceItems = getServiceSubItems(context, serviceId);
+    const title = 'Required Configurations';
+    const emptyText = 'No configurations added yet.';
+    const addLabel = 'Add Configuration';
     return (
         <div className="mt-3 p-4 bg-neutral-light/45 dark:bg-gray-900/50 border border-neutral-medium/60 dark:border-gray-700 rounded-xl space-y-3">
             <div className="flex items-center gap-2 mb-2">
@@ -96,7 +135,7 @@ const TaxComplianceRows = ({
             {/* Table Header */}
             {(assignment.selectedTaxes || []).length > 0 && (
                 <div className="flex items-center gap-2 px-1 text-[9px] font-bold text-secondary uppercase tracking-wider">
-                    <div className="flex-1">Tax Code</div>
+                    <div className="flex-1">Code</div>
                     <div className="w-16">Type</div>
                     <div className="w-[85px]">Frequency</div>
                     <div className="w-12">Sign</div>
@@ -114,12 +153,12 @@ const TaxComplianceRows = ({
                 )}
                 {(assignment.selectedTaxes || []).map((selectedTax: any, taxIndex: number) => {
                     const availableTaxesMaster = complianceItems;
-                    const masterTax = availableTaxesMaster.find((tc: any) => String(tc[idKey]) === String(selectedTax.taxID));
+                    const masterTax = availableTaxesMaster.find((tc: any) => String(getSubItemId(tc)) === String(selectedTax.taxID));
                     const pickedTaxIds = (assignment.selectedTaxes || []).map((st: any) => st.taxID).filter((id: any) => id && id !== selectedTax.taxID);
 
                     const availableTaxes = availableTaxesMaster.filter((tc: any) =>
-                        !pickedTaxIds.includes(tc[idKey]) &&
-                        (!existingTaxIds.has(tc[idKey]) || tc[idKey] === selectedTax.taxID)
+                        !pickedTaxIds.includes(getSubItemId(tc)) &&
+                        (!existingTaxIds.has(getSubItemId(tc)) || getSubItemId(tc) === selectedTax.taxID)
                     );
 
                     const deadlineParts = parseDeadlineCode(selectedTax.dueDateCode);
@@ -132,7 +171,7 @@ const TaxComplianceRows = ({
                                     required
                                     value={selectedTax.taxID}
                                     onChange={(e) => {
-                                        const tc = complianceItems.find((t: any) => String(t[idKey]) === String(e.target.value));
+                                        const tc = complianceItems.find((t: any) => String(getSubItemId(t)) === String(e.target.value));
                                         const prefix = tc?.frequency === 'Monthly' ? 'M' : tc?.frequency === 'Quarterly' ? 'Q' : 'A';
                                         const days = tc?.frequency === 'Monthly' ? '10' : '25';
                                         const paddedDays = String(days).padStart(2, '0');
@@ -144,7 +183,7 @@ const TaxComplianceRows = ({
                                     className="w-full px-2 py-1.5 bg-white dark:bg-gray-800 border border-neutral-medium dark:border-gray-700 rounded-lg text-xs font-bold focus:ring-1 focus:ring-primary outline-none"
                                 >
                                     <option value="">Select Code...</option>
-                                    {availableTaxes.map((tc: any) => <option key={tc[idKey]} value={tc[idKey]}>{tc.complianceCode}</option>)}
+                                    {availableTaxes.map((tc: any) => <option key={getSubItemId(tc)} value={getSubItemId(tc)}>{getSubItemCode(tc)}</option>)}
                                 </select>
                             </div>
 
@@ -304,26 +343,16 @@ const ServiceAssignmentBox = ({
             .filter(r => normalizeId(r.clientId) === targetClientId)
             .map(r => normalizeId(r.id))
     ), [retainers, targetClientId]);
-    const existingTaxIds = useMemo(() => new Set(
+    const existingSubItemIds = useMemo(() => new Set(
         (context?.deadlines || [])
             .filter((d: any) =>
                 targetClientRetainerIds.has(normalizeId(d.retainerID)) &&
-                normalizeId(d.serviceID) === '1'
+                normalizeId(d.serviceID) === normalizeId(assignment.serviceId)
             )
             .map((d: any) => d.taxID)
             .filter(Boolean)
-    ), [context?.deadlines, targetClientRetainerIds]);
-    const existingGovtIds = useMemo(() => new Set(
-        (context?.deadlines || [])
-            .filter((d: any) =>
-                targetClientRetainerIds.has(normalizeId(d.retainerID)) &&
-                normalizeId(d.serviceID) === '2'
-            )
-            .map((d: any) => d.taxID)
-            .filter(Boolean)
-    ), [context?.deadlines, targetClientRetainerIds]);
-    const isTaxService = normalizeId(assignment.serviceId) === '1';
-    const isGovtService = normalizeId(assignment.serviceId) === '2';
+    ), [assignment.serviceId, context?.deadlines, targetClientRetainerIds]);
+    const hasServiceSubItems = getServiceSubItems(context, assignment.serviceId).length > 0;
     const deadlineParts = parseDeadlineCode(assignment.dueDateCode || 'M+10D');
 
     const availableServices = (context?.services || [])
@@ -407,7 +436,7 @@ const ServiceAssignmentBox = ({
                     />
                 </div>
 
-                {assignment.serviceId && !isTaxService && !isGovtService && (
+                {assignment.serviceId && !hasServiceSubItems && (
                     <div className="col-span-full mt-1 p-4 bg-neutral-light/45 dark:bg-gray-900/50 border border-neutral-medium/60 dark:border-gray-700 rounded-xl space-y-3">
                         <div className="flex items-center gap-2 mb-1">
                             <Calendar size={12} className="text-primary" />
@@ -459,25 +488,14 @@ const ServiceAssignmentBox = ({
                 )}
             </div>
 
-            {isTaxService && (
+            {hasServiceSubItems && (
                 <TaxComplianceRows
                     assignment={assignment}
                     updateAssignment={updateAssignment}
                     context={context}
                     targetClientId={targetClientId}
-                    existingTaxIds={existingTaxIds}
-                    mode="tax"
-                />
-            )}
-
-            {isGovtService && (
-                <TaxComplianceRows
-                    assignment={assignment}
-                    updateAssignment={updateAssignment}
-                    context={context}
-                    targetClientId={targetClientId}
-                    existingTaxIds={existingGovtIds}
-                    mode="govt"
+                    existingTaxIds={existingSubItemIds}
+                    serviceId={assignment.serviceId}
                 />
             )}
         </div>
@@ -1633,6 +1651,14 @@ const Clients: React.FC = () => {
         return map;
     }, [context?.taxCompliances]);
 
+    const serviceSubItemByServiceAndId = useMemo(() => {
+        const map = new Map<string, any>();
+        (context?.serviceSubItems || []).forEach((item: any) => {
+            map.set(`${normalizeId(item.serviceID)}:${normalizeId(getSubItemId(item))}`, item);
+        });
+        return map;
+    }, [context?.serviceSubItems]);
+
     const govtById = useMemo(() => {
         const map = new Map<string, any>();
         (context?.govtContributions || []).forEach((item: any) => map.set(normalizeId(item.id), item));
@@ -1652,8 +1678,9 @@ const Clients: React.FC = () => {
             return text.split(' | ').map((entry) => {
                 const [serviceId, taxId, dueDate] = entry.split(':');
                 const service = serviceById.get(normalizeId(serviceId));
-                const tax = normalizeId(serviceId) === '2' ? govtById.get(normalizeId(taxId)) : taxById.get(normalizeId(taxId));
-                const label = tax?.complianceName || tax?.complianceCode || service?.name || service?.serviceName || serviceId;
+                const subItem = serviceSubItemByServiceAndId.get(`${normalizeId(serviceId)}:${normalizeId(taxId)}`);
+                const tax = subItem || (normalizeId(serviceId) === '2' ? govtById.get(normalizeId(taxId)) : taxById.get(normalizeId(taxId)));
+                const label = getSubItemName(tax) || getSubItemCode(tax) || service?.name || service?.serviceName || serviceId;
                 return dueDate ? `${label} - ${dueDate}` : label;
             }).join('; ');
         }
@@ -1783,11 +1810,8 @@ const Clients: React.FC = () => {
             return normalizeId(d.retainerID) === normalizeId(r.id) && normalizeId(d.retainerID) !== '0';
         });
 
-        // Check if service is Tax Compliances (ID: 0001)
         const serviceId = normalizeId(r.serviceType);
-        const isTaxService = serviceId === '1' || serviceId === '0001';
-        const isGovtService = serviceId === '2' || serviceId === '0002';
-        const isMultiComplianceService = isTaxService || isGovtService;
+        const isMultiComplianceService = getServiceSubItems(context, serviceId).length > 0;
 
         setEditingRetainerId(r.id);
 
@@ -2150,8 +2174,7 @@ const Clients: React.FC = () => {
             return;
         }
         const invalidMultiCompliance = assignments.some(a => {
-            const serviceId = normalizeId(a.serviceId);
-            const isMultiCompliance = serviceId === '1' || serviceId === '2';
+            const isMultiCompliance = getServiceSubItems(context, a.serviceId).length > 0;
             if (!isMultiCompliance) return false;
             const rows = a.selectedTaxes || [];
             return rows.length === 0 || rows.some((row: any) => !row.taxID || !row.dueDateCode);

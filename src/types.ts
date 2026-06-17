@@ -214,6 +214,7 @@ export interface AppData {
   deliverables: DeliverableLog[];
   services: Service[];
   serviceManuals: ServiceManual[];
+  serviceSubItems: ServiceSubItem[];
   govtContributions: GovernmentContribution[];
   taxCompliances: ServiceTaxCompliance[];
   deadlines: RetainerDeadline[];
@@ -230,6 +231,19 @@ export interface Service {
   id: string;
   name: string;
   type: string;
+}
+
+export interface ServiceSubItem {
+  id: string;
+  serviceID: string;
+  subItemID: string;
+  code: string;
+  name: string;
+  frequency: 'Monthly' | 'Quarterly' | 'Annual';
+  source?: string;
+  status?: 'Active' | 'Inactive';
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ServiceRequirement {

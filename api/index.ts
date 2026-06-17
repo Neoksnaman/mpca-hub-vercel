@@ -158,6 +158,10 @@ function normalizeComplianceItemId(serviceId: any, itemId: any) {
   return isTaxComplianceService(serviceId) ? toPaddedId(itemId) : String(itemId || '').trim();
 }
 
+function normalizeServiceSubItemId(item: any) {
+  return String(item?.subItemID || item?.taxID || item?._id || item?.id || '').trim();
+}
+
 function newRecordId(prefix: string) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
@@ -493,6 +497,22 @@ function mapMongoGovtContribution(contribution: any) {
   };
 }
 
+function mapMongoServiceSubItem(item: any) {
+  const subItemID = normalizeServiceSubItemId(item);
+  return {
+    id: subItemID,
+    serviceID: String(item?.serviceID || ''),
+    subItemID,
+    code: item?.code || item?.complianceCode || '',
+    name: item?.name || item?.complianceName || '',
+    frequency: item?.frequency || 'Monthly',
+    source: item?.source || '',
+    status: item?.status || 'Active',
+    createdAt: item?.createdAt instanceof Date ? item.createdAt.toISOString() : item?.createdAt || '',
+    updatedAt: item?.updatedAt instanceof Date ? item.updatedAt.toISOString() : item?.updatedAt || ''
+  };
+}
+
 function mapMongoDeadline(deadline: any) {
   return {
     deadlineID: String(deadline?.deadlineID || deadline?._id || ''),
@@ -674,6 +694,7 @@ async function ensureMongoIndexes() {
         createIndex('retainerEngagements', { clientID: 1 }),
         createIndex('specialEngagements', { specialID: 1 }),
         createIndex('specialEngagements', { clientID: 1 }),
+        createIndex('serviceSubItems', { serviceID: 1, subItemID: 1 }),
         createIndex('deadlines', { deadlineID: 1 }),
         createIndex('deadlines', { retainerID: 1 }),
         createIndex('retainerLogs', { deadlineID: 1, period: 1 }),
@@ -1135,6 +1156,7 @@ app.get('/api/data', async (req, res) => {
       specials,
       services,
       serviceManuals,
+      serviceSubItems,
       govtContributions,
       taxCompliances,
       deadlines,
@@ -1174,6 +1196,11 @@ app.get('/api/data', async (req, res) => {
         .sort({ title: 1 })
         .toArray()
         .then(rows => rows.map(mapMongoServiceManual)),
+      db.collection<any>('serviceSubItems')
+        .find({ $or: [{ status: 'Active' }, { status: { $exists: false } }] }, { projection: { serviceID: 1, subItemID: 1, code: 1, name: 1, complianceCode: 1, complianceName: 1, frequency: 1, source: 1, status: 1, createdAt: 1, updatedAt: 1 } })
+        .sort({ serviceID: 1, code: 1, name: 1 })
+        .toArray()
+        .then(rows => rows.map(mapMongoServiceSubItem)),
       db.collection<any>('govtContributions')
         .find({}, { projection: { complianceName: 1, complianceCode: 1, frequency: 1, createdAt: 1, updatedAt: 1 } })
         .sort({ complianceCode: 1 })
@@ -1234,6 +1261,7 @@ app.get('/api/data', async (req, res) => {
       clients,
       services,
       serviceManuals,
+      serviceSubItems,
       govtContributions,
       retainerLogs,
       taskLog,
@@ -2160,7 +2188,7 @@ app.put('/api/retainers/:id', async (req, res) => {
       .map((row: any) => [`${toPaddedId(row.serviceID)}:${toPaddedId(row.taxID || '')}`, row.dueDate || '']));
     const beforeDeadlineMap = getDeadlineConfigMap(existingDeadlines);
     const afterDeadlineMap = new Map<string, string>();
-    if (isMultiComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
+    if (selectedTaxes && selectedTaxes.length > 0) {
       selectedTaxes.forEach((tax: any) => {
         const complianceItemId = normalizeComplianceItemId(normalizedServiceId, tax.taxID);
         afterDeadlineMap.set(`${normalizedServiceId}:${complianceItemId}`, tax.dueDateCode || '');
@@ -2218,7 +2246,7 @@ app.put('/api/retainers/:id', async (req, res) => {
 
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Retainer not found' });
 
-    if (isMultiComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
+    if (selectedTaxes && selectedTaxes.length > 0) {
       const selectedTaxRows = selectedTaxes
         .map((tax: any) => ({
           taxID: normalizeComplianceItemId(normalizedServiceId, tax.taxID),
@@ -2428,7 +2456,7 @@ app.post('/api/retainers', async (req, res) => {
 
       let deadlineRows = [];
 
-      if (isMultiComplianceService(normalizedServiceId) && selectedTaxes && selectedTaxes.length > 0) {
+      if (selectedTaxes && selectedTaxes.length > 0) {
         deadlineRows = selectedTaxes.map((tax: any) => {
           const deadlineID = newRecordId('dl');
           return {
