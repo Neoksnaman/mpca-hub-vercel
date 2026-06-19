@@ -244,6 +244,7 @@ const Settings: React.FC = () => {
         { value: 'credentials', label: 'Credentials' },
         { value: 'transmittals', label: 'Transmittals' },
         { value: 'meetings', label: 'Meetings' },
+        { value: 'serviceManuals', label: 'Library' },
         { value: 'settings', label: 'Settings' }
     ];
 

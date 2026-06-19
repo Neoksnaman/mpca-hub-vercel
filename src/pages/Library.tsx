@@ -1,8 +1,9 @@
-import React, { useContext, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
     BookOpen,
     CheckCircle2,
+    ChevronDown,
     ExternalLink,
     FileText,
     Loader2,
@@ -15,7 +16,7 @@ import {
 } from 'lucide-react';
 import { AppContext } from '../App';
 import { ServiceManual, ServiceRequirement } from '../types';
-import { deleteFile, deleteServiceManual, normalizeId, saveServiceManual, uploadFile } from '../services/googleSheetsService';
+import { deleteFile, deleteServiceManual, fetchAuditLogs, normalizeId, saveServiceManual, uploadFile } from '../services/googleSheetsService';
 import { MAX_TEMPLATE_SIZE } from '../constants';
 
 const emptyManual = (): ServiceManual => ({
@@ -53,6 +54,66 @@ const getDriveUrl = (idOrUrl?: string) => {
     if (!idOrUrl) return '';
     if (idOrUrl.startsWith('http')) return idOrUrl;
     return `https://drive.google.com/file/d/${idOrUrl}/view?usp=sharing`;
+};
+
+const formatAuditTimestamp = (value: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('default', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+const formatAuditFieldLabel = (key: string) => {
+    const labels: Record<string, string> = {
+        serviceID: 'Service',
+        manualGuide: 'Manual / Guide',
+        lastUpdatedBy: 'Updated By',
+        lastUpdatedAt: 'Updated At',
+        templateFileId: 'Template File',
+        templateFileName: 'Template Name',
+        templateUrl: 'Template URL',
+        isRequired: 'Required',
+        sortOrder: 'Sort Order',
+    };
+    return labels[key] || key
+        .replace(/ID$/, '')
+        .replace(/Id$/, '')
+        .replace(/([A-Z])/g, ' $1')
+        .replace(/^./, char => char.toUpperCase())
+        .trim();
+};
+
+const getLibraryAuditDetailRows = (details: any) => {
+    const before = details?.before || {};
+    const after = details?.after || {};
+    const hiddenKeys = new Set(['_id', 'id']);
+    const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+        .filter(key => !hiddenKeys.has(key))
+        .filter(key => JSON.stringify(before[key] ?? '') !== JSON.stringify(after[key] ?? ''));
+
+    return keys.map(key => ({
+        key,
+        label: formatAuditFieldLabel(key),
+        before: before[key],
+        after: after[key]
+    }));
+};
+
+const formatLibraryAuditValue = (value: any) => {
+    if (value === null || value === undefined || value === '') return 'Blank';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+        return value.map((item, index) => {
+            if (typeof item !== 'object' || item === null) return String(item);
+            const title = item.title || `Requirement ${index + 1}`;
+            const type = item.isRequired === false ? 'Optional' : 'Required';
+            const description = item.description ? ` | Notes: ${item.description}` : '';
+            const template = item.templateFileName ? ` | Template: ${item.templateFileName}` : ' | Template: None';
+            return `${index + 1}. ${title} (${type})${description}${template}`;
+        }).join('\n') || 'None';
+    }
+    if (typeof value === 'object') return JSON.stringify(value, null, 2);
+    return String(value);
 };
 
 const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, isDeleting }: any) => {
@@ -129,6 +190,38 @@ const Library: React.FC = () => {
         onConfirm: async () => {},
         isDeleting: false
     });
+    const [auditLogs, setAuditLogs] = useState<any[]>([]);
+    const [isAuditLoading, setIsAuditLoading] = useState(false);
+    const [auditPage, setAuditPage] = useState(1);
+    const [auditTotalPages, setAuditTotalPages] = useState(1);
+    const [expandedAuditLogId, setExpandedAuditLogId] = useState<string | null>(null);
+
+    const loadAuditLogs = useCallback(async (manualId: string, page: number = 1) => {
+        if (!manualId) return;
+        try {
+            setIsAuditLoading(true);
+            const result = await fetchAuditLogs({ entityType: 'serviceManual', entityId: manualId, page, limit: 5 });
+            setAuditLogs(result.logs || []);
+            setAuditTotalPages(result.totalPages || 1);
+            setAuditPage(result.page || page);
+            setExpandedAuditLogId(null);
+        } catch (e: any) {
+            context?.showToast(e.message || 'Failed to load audit logs.', 'error');
+        } finally {
+            setIsAuditLoading(false);
+        }
+    }, [context]);
+
+    useEffect(() => {
+        if (selectedManualId) {
+            loadAuditLogs(selectedManualId, 1);
+        } else {
+            setAuditLogs([]);
+            setAuditPage(1);
+            setAuditTotalPages(1);
+            setExpandedAuditLogId(null);
+        }
+    }, [selectedManualId, loadAuditLogs]);
 
     const closeDeleteModal = () => setDeleteModal(prev => ({ ...prev, isOpen: false, isDeleting: false }));
 
@@ -177,6 +270,7 @@ const Library: React.FC = () => {
         setOriginalManual(JSON.parse(JSON.stringify(manual)));
         setDraftManual(JSON.parse(JSON.stringify(manual)));
         setIsEditing(false);
+        setExpandedAuditLogId(null);
     };
 
     const openNewManual = async () => {
@@ -302,6 +396,15 @@ const Library: React.FC = () => {
                 requirements: cleanedRequirements
             });
 
+            if (result.unchanged) {
+                context?.showToast('No changes to save.', 'info');
+                setDraftManual(result.manual);
+                setOriginalManual(JSON.parse(JSON.stringify(result.manual)));
+                setPendingUploads({});
+                setIsEditing(false);
+                return;
+            }
+
             // Delete removed/replaced template files from Google Drive
             for (const fileId of idsToDelete) {
                 try {
@@ -318,6 +421,7 @@ const Library: React.FC = () => {
             setOriginalManual(JSON.parse(JSON.stringify(result.manual)));
             setPendingUploads({});
             setIsEditing(false);
+            loadAuditLogs(result.manual.id, 1);
         } catch (error: any) {
             context?.showToast(error.message || 'Unable to save service manual.', 'error');
         } finally {
@@ -541,6 +645,101 @@ const Library: React.FC = () => {
                             )}
                         </InfoCard>
                     </section>
+
+                    {!isEditing && selectedManualId && (
+                        <section className="space-y-4">
+                            <div className="flex items-center gap-2">
+                                <div className="w-1 h-4 bg-primary rounded-full" />
+                                <h3 className="text-sm font-black text-neutral-dark dark:text-white">Audit Logs</h3>
+                            </div>
+                            <div className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm overflow-hidden">
+                                <div className={`${auditLogs.length > 0 || isAuditLoading ? 'min-h-[205px]' : ''} transition-opacity duration-200 ${isAuditLoading && auditLogs.length > 0 ? 'opacity-70' : 'opacity-100'}`}>
+                                    {auditLogs.length > 0 ? (
+                                        auditLogs.map((log) => {
+                                            const detailRows = getLibraryAuditDetailRows(log.details);
+                                            const isExpanded = expandedAuditLogId === log.id;
+                                            const hasDetails = detailRows.length > 0;
+                                            return (
+                                                <div key={log.id} className="border-b border-neutral-medium/40 dark:border-gray-700/60 last:border-0 hover:bg-neutral-light/50 dark:hover:bg-gray-800 transition-colors">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => hasDetails && setExpandedAuditLogId(isExpanded ? null : log.id)}
+                                                        className="w-full px-5 py-3 text-left"
+                                                    >
+                                                        <div className="flex items-start justify-between gap-4">
+                                                            <div className="min-w-0">
+                                                                <div className="flex items-center gap-2">
+                                                                    <p className="text-xs font-black text-neutral-dark dark:text-white">{log.actionLabel || log.action}</p>
+                                                                    {hasDetails && (
+                                                                        <ChevronDown size={13} className={`text-secondary/50 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                                                    )}
+                                                                </div>
+                                                                <p className="mt-1 text-[11px] font-bold text-secondary dark:text-gray-400">
+                                                                    {log.userName || 'System'}{log.userRole ? ` - ${log.userRole}` : ''}
+                                                                </p>
+                                                            </div>
+                                                            <p className="shrink-0 text-[10px] font-bold text-secondary/70 dark:text-gray-400">{formatAuditTimestamp(log.createdAt)}</p>
+                                                        </div>
+                                                        {log.summary && (
+                                                            <p className="mt-2 text-[11px] font-medium text-secondary dark:text-gray-400">{log.summary}</p>
+                                                        )}
+                                                    </button>
+                                                    {isExpanded && hasDetails && (
+                                                        <div className="mx-5 mb-3 rounded-xl border border-neutral-medium/50 dark:border-gray-700/70 bg-neutral-light/40 dark:bg-gray-900/40 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                            <div className="grid grid-cols-[1fr_1fr_1fr] border-b border-neutral-medium/40 dark:border-gray-700/60 bg-white/50 dark:bg-gray-800/50">
+                                                                <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Field</div>
+                                                                <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">Before</div>
+                                                                <div className="px-3 py-2 text-[9px] font-black text-secondary/70 uppercase tracking-widest">After</div>
+                                                            </div>
+                                                            {detailRows.map((row) => (
+                                                                <div key={row.key} className="grid grid-cols-[1fr_1fr_1fr] items-start border-b border-neutral-medium/30 dark:border-gray-700/50 last:border-0">
+                                                                    <div className="px-3 py-2 text-[10px] font-black text-neutral-dark dark:text-white">{row.label}</div>
+                                                                    <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                        <div className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words pr-1 custom-scrollbar">{formatLibraryAuditValue(row.before)}</div>
+                                                                    </div>
+                                                                    <div className="px-3 py-2 text-[10px] font-semibold text-secondary dark:text-gray-400">
+                                                                        <div className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words pr-1 custom-scrollbar">{formatLibraryAuditValue(row.after)}</div>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })
+                                    ) : isAuditLoading ? (
+                                        <div className="h-[205px] flex flex-col items-center justify-center gap-2 text-xs font-bold text-secondary/60">
+                                            <Loader2 size={16} className="animate-spin text-primary/70" />
+                                            Loading audit logs...
+                                        </div>
+                                    ) : (
+                                        <div className="m-4 py-8 text-center border border-dashed border-neutral-medium dark:border-gray-700 rounded-[2rem] bg-white/40 dark:bg-gray-900/40">
+                                            <p className="text-[9px] text-secondary font-black uppercase tracking-widest opacity-30">No audit logs recorded</p>
+                                        </div>
+                                    )}
+                                </div>
+                                {auditTotalPages > 1 && (
+                                    <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-neutral-medium/40 dark:border-gray-700/60 bg-neutral-light/30 dark:bg-gray-900/30">
+                                        <button
+                                            onClick={() => selectedManualId && loadAuditLogs(selectedManualId, Math.max(auditPage - 1, 1))}
+                                            disabled={isAuditLoading || auditPage <= 1}
+                                            className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                        >
+                                            Previous
+                                        </button>
+                                        <span className="text-[10px] font-black text-secondary dark:text-gray-400">Page {auditPage} of {auditTotalPages}</span>
+                                        <button
+                                            onClick={() => selectedManualId && loadAuditLogs(selectedManualId, Math.min(auditPage + 1, auditTotalPages))}
+                                            disabled={isAuditLoading || auditPage >= auditTotalPages}
+                                            className="px-3 py-1.5 rounded-lg border border-neutral-medium dark:border-gray-700 text-[10px] font-black text-secondary hover:text-primary hover:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                                        >
+                                            Next
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </section>
+                    )}
                 </div>
 
                 {isEditing && (

@@ -1283,6 +1283,39 @@ app.get('/api/data', async (req, res) => {
   }
 });
 
+function formatServiceManualRequirementsForAudit(requirements: any[]) {
+  if (!Array.isArray(requirements) || requirements.length === 0) return 'None';
+  return requirements.map((requirement: any, index: number) => {
+    const title = String(requirement?.title || 'Untitled requirement').trim();
+    const requirementType = requirement?.isRequired === false ? 'Optional' : 'Required';
+    const description = String(requirement?.description || '').trim();
+    const templateName = String(requirement?.templateFileName || '').trim();
+    return [
+      `${index + 1}. ${title} (${requirementType})`,
+      description ? `Notes: ${description}` : '',
+      templateName ? `Template: ${templateName}` : 'Template: None'
+    ].filter(Boolean).join(' | ');
+  }).join('\n');
+}
+
+function getServiceManualAuditSnapshot(manual: any) {
+  return {
+    title: String(manual?.title || '').trim(),
+    overview: String(manual?.overview || '').trim(),
+    manualGuide: String(manual?.manualGuide || '').trim(),
+    requirements: formatServiceManualRequirementsForAudit(manual?.requirements || []),
+    notes: String(manual?.notes || '').trim()
+  };
+}
+
+function buildServiceManualAuditSummary(action: 'created' | 'updated' | 'deleted', title: string, changedKeys: string[]) {
+  const manualTitle = title || 'Untitled Manual';
+  if (action === 'created') return `Created service manual "${manualTitle}".`;
+  if (action === 'deleted') return `Deleted service manual "${manualTitle}".`;
+  const labels = changedKeys.map((key) => key === 'manualGuide' ? 'manual / guide' : formatAuditFieldLabel(key).toLowerCase());
+  return `Updated ${formatAuditList(labels)} for "${manualTitle}".`;
+}
+
 app.put('/api/service-manuals', async (req, res) => {
   try {
     const db = await getMongoDb();
@@ -1325,6 +1358,13 @@ app.put('/api/service-manuals', async (req, res) => {
       ...(existing?.createdAt ? {} : { createdAt: now })
     };
 
+    const auditBefore = existing ? getServiceManualAuditSnapshot(existing) : null;
+    const auditAfter = getServiceManualAuditSnapshot(updateDoc);
+    const auditDetails = buildChangedAuditDetails(auditBefore, auditAfter);
+    if (existing && auditDetails.changedKeys.length === 0) {
+      return res.json({ success: true, unchanged: true, manual: mapMongoServiceManual(existing) });
+    }
+
     await db.collection<any>('serviceManuals').updateOne(
       { _id: id },
       { $set: updateDoc, $setOnInsert: { _id: id } },
@@ -1332,7 +1372,22 @@ app.put('/api/service-manuals', async (req, res) => {
     );
 
     const saved = await db.collection<any>('serviceManuals').findOne({ _id: id });
-    res.json({ success: true, manual: mapMongoServiceManual(saved) });
+
+    const auditAction = existing ? 'updated' : 'created';
+    await writeAuditLog(db, req, {
+      entityType: 'serviceManual',
+      entityId: String(id),
+      action: `service_manual_${auditAction}`,
+      actionLabel: existing ? 'Updated Service Manual' : 'Created Service Manual',
+      summary: buildServiceManualAuditSummary(auditAction, title, auditDetails.changedKeys),
+      details: {
+        serviceManualID: String(id),
+        before: auditDetails.before,
+        after: auditDetails.after
+      }
+    });
+
+    res.json({ success: true, unchanged: false, manual: mapMongoServiceManual(saved) });
   } catch (error: any) {
     console.error('Save service manual error:', error);
     res.status(500).json({ error: error.message });
@@ -1344,7 +1399,23 @@ app.delete('/api/service-manuals/:id', async (req, res) => {
     const id = String(req.params.id || '').trim();
     if (!id) return res.status(400).json({ error: 'Manual ID is required' });
     const db = await getMongoDb();
+    const existing = await db.collection<any>('serviceManuals').findOne({ _id: id });
+    if (!existing) return res.status(404).json({ error: 'Service manual not found' });
     await db.collection<any>('serviceManuals').deleteOne({ _id: id });
+    const auditBefore = getServiceManualAuditSnapshot(existing);
+    const auditDetails = buildChangedAuditDetails(auditBefore, null);
+    await writeAuditLog(db, req, {
+      entityType: 'serviceManual',
+      entityId: id,
+      action: 'service_manual_deleted',
+      actionLabel: 'Deleted Service Manual',
+      summary: buildServiceManualAuditSummary('deleted', existing.title || '', auditDetails.changedKeys),
+      details: {
+        serviceManualID: id,
+        before: auditDetails.before,
+        after: auditDetails.after
+      }
+    });
     res.json({ success: true });
   } catch (error: any) {
     console.error('Delete service manual error:', error);
@@ -2876,6 +2947,7 @@ app.get('/api/audit-logs', async (req, res) => {
       credentials: { action: { $regex: '^credential_' } },
       transmittals: { entityType: 'transmittal' },
       meetings: { entityType: 'meeting' },
+      serviceManuals: { entityType: 'serviceManual' },
       settings: { action: { $regex: '^user_' } }
     };
     if (module && module !== 'all' && moduleConditions[module]) {
@@ -2946,8 +3018,76 @@ app.get('/api/audit-logs', async (req, res) => {
       collection.countDocuments(query)
     ]);
 
+    const legacyUserIds = Array.from(new Set(
+      logs
+        .filter((log: any) => !String(log?.userName || '').trim() && String(log?.userId || '').trim())
+        .map((log: any) => String(log.userId).trim())
+    ));
+    const legacyUsers = legacyUserIds.length > 0
+      ? await db.collection<any>('users').find({
+          $or: [{ _id: { $in: legacyUserIds } }, { userID: { $in: legacyUserIds } }]
+        }, { projection: { userID: 1, firstName: 1, lastName: 1, userName: 1, role: 1 } }).toArray()
+      : [];
+    const legacyUserById = new Map<string, any>();
+    legacyUsers.forEach((user: any) => {
+      userIdCandidates(String(user?.userID || user?._id || '')).forEach(id => legacyUserById.set(id, user));
+    });
+
+    const serviceManualIds = Array.from(new Set(
+      logs
+        .filter((log: any) => log?.entityType === 'serviceManual')
+        .flatMap((log: any) => [
+          String(log?.entityId || '').trim(),
+          String(log?.details?.serviceManualID || '').trim()
+        ])
+        .filter(Boolean)
+    ));
+    const serviceManualsForAudit = serviceManualIds.length > 0
+      ? await db.collection<any>('serviceManuals').find({
+          _id: { $in: serviceManualIds }
+        }, { projection: { title: 1 } }).toArray()
+      : [];
+    const serviceManualTitleById = new Map<string, string>();
+    serviceManualsForAudit.forEach((manual: any) => {
+      const title = String(manual?.title || '').trim();
+      if (title) serviceManualTitleById.set(String(manual?._id || ''), title);
+    });
+
+    const mappedLogs = logs.map((log: any) => {
+      const mapped = mapMongoAuditLog(log);
+      if (!String(log?.userName || '').trim() && mapped.userId) {
+        const legacyUser = userIdCandidates(mapped.userId).map(id => legacyUserById.get(id)).find(Boolean);
+        if (legacyUser) {
+          mapped.userName = `${legacyUser.firstName || ''} ${legacyUser.lastName || ''}`.trim() || legacyUser.userName || 'System';
+          mapped.userRole = legacyUser.role || '';
+        }
+      }
+
+      if (mapped.entityType === 'serviceManual') {
+        const before = mapped.details?.before || null;
+        const after = mapped.details?.after || null;
+        const changedKeys = Array.from(new Set([...Object.keys(before || {}), ...Object.keys(after || {})]))
+          .filter(key => JSON.stringify(before?.[key] ?? '') !== JSON.stringify(after?.[key] ?? ''));
+        const actionText = String(mapped.action || '').toLowerCase();
+        const auditAction: 'created' | 'updated' | 'deleted' = actionText.includes('delete')
+          ? 'deleted'
+          : actionText.includes('create') || !before
+            ? 'created'
+            : 'updated';
+        const serviceManualID = String(mapped.details?.serviceManualID || mapped.entityId || '').trim();
+        const title = String(after?.title || before?.title || serviceManualTitleById.get(serviceManualID) || '').trim();
+        mapped.actionLabel = auditAction === 'created'
+          ? 'Created Service Manual'
+          : auditAction === 'deleted'
+            ? 'Deleted Service Manual'
+            : 'Updated Service Manual';
+        mapped.summary = buildServiceManualAuditSummary(auditAction, title, changedKeys);
+      }
+      return mapped;
+    });
+
     res.json({
-      logs: logs.map(mapMongoAuditLog),
+      logs: mappedLogs,
       total,
       page,
       totalPages: Math.max(Math.ceil(total / limit), 1)

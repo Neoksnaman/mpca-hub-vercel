@@ -263,7 +263,7 @@ export const updateChatThreadSettings = (data: { threadId: string; userId: strin
     });
 
 export const saveServiceManual = (data: Partial<ServiceManual> & { title: string; userID?: string }) =>
-    apiCall<{ success: boolean; manual: ServiceManual }>('/api/service-manuals', {
+    apiCall<{ success: boolean; unchanged?: boolean; manual: ServiceManual }>('/api/service-manuals', {
         method: 'PUT',
         body: JSON.stringify(data)
     });
