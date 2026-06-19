@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
     BookOpen,
     CheckCircle2,
-    Download,
+    ExternalLink,
     FileText,
     Loader2,
     Pencil,
@@ -15,7 +15,8 @@ import {
 } from 'lucide-react';
 import { AppContext } from '../App';
 import { ServiceManual, ServiceRequirement } from '../types';
-import { deleteServiceManual, normalizeId, saveServiceManual, uploadFile } from '../services/googleSheetsService';
+import { deleteFile, deleteServiceManual, normalizeId, saveServiceManual, uploadFile } from '../services/googleSheetsService';
+import { MAX_TEMPLATE_SIZE } from '../constants';
 
 const emptyManual = (): ServiceManual => ({
     id: '',
@@ -112,7 +113,9 @@ const Library: React.FC = () => {
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [deletingId, setDeletingId] = useState<string | null>(null);
+    const [originalManual, setOriginalManual] = useState<ServiceManual | null>(null);
     const [uploadingRequirementId, setUploadingRequirementId] = useState<string | null>(null);
+    const [pendingUploads, setPendingUploads] = useState<Record<string, File>>({});
     const [deleteModal, setDeleteModal] = useState<{
         isOpen: boolean;
         title: string;
@@ -168,21 +171,27 @@ const Library: React.FC = () => {
             .sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
     }, [manuals, searchQuery]);
 
-    const openManual = (manual: ServiceManual) => {
+    const openManual = async (manual: ServiceManual) => {
+        setPendingUploads({});
         setSelectedManualId(manual.id);
+        setOriginalManual(JSON.parse(JSON.stringify(manual)));
         setDraftManual(JSON.parse(JSON.stringify(manual)));
         setIsEditing(false);
     };
 
-    const openNewManual = () => {
+    const openNewManual = async () => {
+        setPendingUploads({});
         setSelectedManualId(null);
+        setOriginalManual(null);
         setDraftManual(emptyManual());
         setIsEditing(true);
     };
 
-    const closeDrawer = () => {
+    const closeDrawer = async () => {
+        setPendingUploads({});
         setSelectedManualId(null);
         setDraftManual(null);
+        setOriginalManual(null);
         setIsEditing(false);
     };
 
@@ -194,28 +203,35 @@ const Library: React.FC = () => {
     };
 
     const removeRequirement = (id: string) => {
-        setDraftManual(prev => prev ? {
-            ...prev,
-            requirements: prev.requirements.filter(requirement => requirement.id !== id)
-        } : prev);
+        setPendingUploads(prev => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+        });
+        setDraftManual(prev => {
+            if (!prev) return prev;
+            return {
+                ...prev,
+                requirements: prev.requirements.filter(requirement => requirement.id !== id)
+            };
+        });
     };
 
     const handleUploadTemplate = async (requirementId: string, file?: File) => {
         if (!file) return;
-        try {
-            setUploadingRequirementId(requirementId);
-            const result = await uploadFile(file, 'Library');
-            updateRequirement(requirementId, {
-                templateFileId: result.id,
-                templateFileName: file.name,
-                templateUrl: result.url
-            });
-            context?.showToast('Template uploaded.', 'success');
-        } catch (error: any) {
-            context?.showToast(error.message || 'Unable to upload template.', 'error');
-        } finally {
-            setUploadingRequirementId(null);
+        if (file.size > MAX_TEMPLATE_SIZE) {
+            context?.showToast(`File "${file.name}" exceeds the ${MAX_TEMPLATE_SIZE / (1024 * 1024)} MB limit.`, 'error');
+            return;
         }
+        
+        setPendingUploads(prev => ({ ...prev, [requirementId]: file }));
+        const fileSizeMB = (file.size / (1024 * 1024)).toFixed(1);
+        updateRequirement(requirementId, {
+            templateFileId: '', // Clear any existing ID since it will be replaced on save
+            templateFileName: `${file.name} (${fileSizeMB} MB)`,
+            templateUrl: '' // Clear URL as it's not uploaded yet
+        });
+        context?.showToast('Template attached and will be uploaded upon saving.', 'success');
     };
 
     const handleSave = async () => {
@@ -228,9 +244,56 @@ const Library: React.FC = () => {
 
         try {
             setIsSaving(true);
-            const cleanedRequirements = draftManual.requirements
+
+            let cleanedRequirements = draftManual.requirements
                 .map((requirement, index) => ({ ...requirement, sortOrder: index }))
                 .filter(requirement => requirement.title.trim());
+
+            // Process pending uploads
+            const successfulUploadIds: string[] = [];
+            const pendingEntries = Object.entries(pendingUploads) as [string, File][];
+            if (pendingEntries.length > 0) {
+                context?.showToast(`Uploading ${pendingEntries.length} attached file(s)...`, 'success');
+            }
+
+            for (const [reqId, file] of pendingEntries) {
+                // Ensure this requirement still exists (wasn't deleted before save)
+                if (!cleanedRequirements.find(r => r.id === reqId)) continue;
+
+                try {
+                    setUploadingRequirementId(reqId);
+                    const result = await uploadFile(file, 'Library');
+                    successfulUploadIds.push(result.id);
+                    
+                    cleanedRequirements = cleanedRequirements.map(req => 
+                        req.id === reqId 
+                            ? { ...req, templateFileId: result.id, templateUrl: result.url } 
+                            : req
+                    );
+                } catch (uploadError: any) {
+                    // Rollback successful uploads to prevent partial-save orphans
+                    for (const id of successfulUploadIds) {
+                        deleteFile(id).catch(() => {});
+                    }
+                    throw new Error(`Failed to upload ${file.name}. Save aborted.`);
+                }
+            }
+            setUploadingRequirementId(null);
+
+            // Compute Google Drive file IDs to delete (removed/replaced templates)
+            const idsToDelete: string[] = [];
+            if (originalManual) {
+                originalManual.requirements?.forEach(orig => {
+                    const edited = cleanedRequirements.find(r => r.id === orig.id);
+                    if (!edited && orig.templateFileId) {
+                        // Requirement removed entirely — delete its template file
+                        idsToDelete.push(orig.templateFileId);
+                    } else if (edited && orig.templateFileId && edited.templateFileId !== orig.templateFileId) {
+                        // Template replaced — delete the old file
+                        idsToDelete.push(orig.templateFileId);
+                    }
+                });
+            }
 
             const result = await saveServiceManual({
                 ...draftManual,
@@ -239,15 +302,27 @@ const Library: React.FC = () => {
                 requirements: cleanedRequirements
             });
 
+            // Delete removed/replaced template files from Google Drive
+            for (const fileId of idsToDelete) {
+                try {
+                    await deleteFile(fileId);
+                } catch (e: any) {
+                    context?.showToast(`Failed to delete template file from Drive: ${e.message || 'Unknown error'}`, 'error');
+                }
+            }
+
             context?.showToast('Service manual saved.', 'success');
             await context?.refreshData(true);
             setSelectedManualId(result.manual.id);
             setDraftManual(result.manual);
+            setOriginalManual(JSON.parse(JSON.stringify(result.manual)));
+            setPendingUploads({});
             setIsEditing(false);
         } catch (error: any) {
             context?.showToast(error.message || 'Unable to save service manual.', 'error');
         } finally {
             setIsSaving(false);
+            setUploadingRequirementId(null);
         }
     };
 
@@ -295,16 +370,24 @@ const Library: React.FC = () => {
                         <p className="text-xs font-bold text-secondary mt-2">Last updated by {lastUpdatedBy} - {formatDateTime(selectedManual.lastUpdatedAt)}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                        {canEdit && (
+                        {canEdit && !isSaving && (
                             <button
-                                onClick={() => setIsEditing(prev => !prev)}
-                                className="h-10 w-10 rounded-full border border-neutral-medium dark:border-gray-700 text-secondary hover:text-primary hover:border-primary/30 transition-colors flex items-center justify-center"
+                                onClick={async () => {
+                                    if (isEditing) {
+                                        setPendingUploads({});
+                                        // Restore draft from original
+                                        setDraftManual(originalManual ? JSON.parse(JSON.stringify(originalManual)) : emptyManual());
+                                    }
+                                    setIsEditing(prev => !prev);
+                                }}
+                                disabled={isEditing && !!uploadingRequirementId}
+                                className="h-10 w-10 rounded-full border border-neutral-medium dark:border-gray-700 text-secondary hover:text-primary hover:border-primary/30 transition-colors flex items-center justify-center disabled:opacity-50"
                                 title={isEditing ? 'Cancel editing' : 'Edit manual'}
                             >
                                 {isEditing ? <X size={18} /> : <Pencil size={18} />}
                             </button>
                         )}
-                        <button onClick={closeDrawer} className="h-10 w-10 rounded-full text-secondary hover:text-primary transition-colors flex items-center justify-center">
+                        <button onClick={closeDrawer} disabled={isSaving || !!uploadingRequirementId} className="h-10 w-10 rounded-full text-secondary hover:text-primary transition-colors flex items-center justify-center disabled:opacity-50">
                             <X size={22} />
                         </button>
                     </div>
@@ -319,7 +402,8 @@ const Library: React.FC = () => {
                                     value={selectedManual.overview}
                                     onChange={(e) => setDraftManual(prev => prev ? { ...prev, overview: e.target.value } : prev)}
                                     placeholder="Summarize what this manual covers..."
-                                    className="w-full min-h-[110px] resize-none rounded-xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 p-3 text-sm font-medium text-neutral-dark dark:text-white outline-none focus:border-primary"
+                                    disabled={isSaving}
+                                    className="w-full min-h-[110px] resize-none rounded-xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 p-3 text-sm font-medium text-neutral-dark dark:text-white outline-none focus:border-primary disabled:opacity-50"
                                 />
                             ) : (
                                 <p className="text-sm font-semibold leading-relaxed text-neutral-dark dark:text-white whitespace-pre-wrap">{selectedManual.overview || 'No overview recorded yet.'}</p>
@@ -335,7 +419,8 @@ const Library: React.FC = () => {
                                     value={selectedManual.manualGuide}
                                     onChange={(e) => setDraftManual(prev => prev ? { ...prev, manualGuide: e.target.value } : prev)}
                                     placeholder="Add internal procedure, step-by-step guidance, or handling notes..."
-                                    className="w-full min-h-[160px] resize-none rounded-xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 p-3 text-sm font-medium text-neutral-dark dark:text-white outline-none focus:border-primary"
+                                    disabled={isSaving}
+                                    className="w-full min-h-[160px] resize-none rounded-xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 p-3 text-sm font-medium text-neutral-dark dark:text-white outline-none focus:border-primary disabled:opacity-50"
                                 />
                             ) : (
                                 <p className="text-sm font-semibold leading-relaxed text-neutral-dark dark:text-white whitespace-pre-wrap">{selectedManual.manualGuide || 'No manual or guide recorded yet.'}</p>
@@ -349,7 +434,8 @@ const Library: React.FC = () => {
                             {isEditing && (
                                 <button
                                     onClick={() => setDraftManual(prev => prev ? { ...prev, requirements: [...prev.requirements, newRequirement(prev.requirements.length)] } : prev)}
-                                    className="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-emerald-600 hover:bg-emerald-100 transition-colors"
+                                    disabled={isSaving}
+                                    className="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-emerald-600 hover:bg-emerald-100 transition-colors disabled:opacity-50"
                                 >
                                     <Plus size={14} /> Add Requirement
                                 </button>
@@ -358,72 +444,74 @@ const Library: React.FC = () => {
 
                         <div className="space-y-3">
                             {selectedManual.requirements.length > 0 ? selectedManual.requirements.map((requirement, index) => (
-                                <div key={requirement.id} className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-2xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm p-4">
+                                <div key={requirement.id} className="bg-white/85 dark:bg-gray-800/70 backdrop-blur-md rounded-xl border border-neutral-medium/60 dark:border-gray-700 shadow-sm px-3 py-2.5">
                                     {isEditing ? (
-                                        <div className="space-y-3">
-                                            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-2">
+                                        <div className="space-y-2">
+                                            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-1.5">
                                                 <input
                                                     value={requirement.title}
                                                     onChange={(e) => updateRequirement(requirement.id, { title: e.target.value })}
                                                     placeholder="Requirement title"
-                                                    className="rounded-xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm font-bold outline-none focus:border-primary"
+                                                    disabled={isSaving}
+                                                    className="rounded-lg border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 px-2.5 py-1.5 text-xs font-bold outline-none focus:border-primary disabled:opacity-50"
                                                 />
                                                 <select
                                                     value={requirement.isRequired ? 'Required' : 'Optional'}
                                                     onChange={(e) => updateRequirement(requirement.id, { isRequired: e.target.value === 'Required' })}
-                                                    className="rounded-xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-xs font-black outline-none focus:border-primary"
+                                                    disabled={isSaving}
+                                                    className="rounded-lg border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1.5 text-[11px] font-black outline-none focus:border-primary disabled:opacity-50"
                                                 >
                                                     <option>Required</option>
                                                     <option>Optional</option>
                                                 </select>
-                                                <button onClick={() => removeRequirement(requirement.id)} className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-rose-500 hover:bg-rose-100">
-                                                    <Trash2 size={15} />
+                                                <button onClick={() => removeRequirement(requirement.id)} disabled={isSaving} className="rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1.5 text-rose-500 hover:bg-rose-100 disabled:opacity-50">
+                                                    <Trash2 size={13} />
                                                 </button>
                                             </div>
                                             <textarea
                                                 value={requirement.description}
                                                 onChange={(e) => updateRequirement(requirement.id, { description: e.target.value })}
                                                 placeholder="Requirement notes or instructions..."
-                                                className="w-full min-h-[72px] resize-none rounded-xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 p-3 text-xs font-medium outline-none focus:border-primary"
+                                                disabled={isSaving}
+                                                className="w-full min-h-[52px] resize-none rounded-lg border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                                             />
-                                            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                                                <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-neutral-medium dark:border-gray-700 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-secondary hover:border-primary hover:text-primary transition-colors">
-                                                    {uploadingRequirementId === requirement.id ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                                                    Upload Template
+                                            <div className="flex items-center gap-2">
+                                                <label className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-dashed border-neutral-medium dark:border-gray-700 px-2.5 py-1.5 text-[10px] font-black uppercase tracking-widest text-secondary hover:border-primary hover:text-primary transition-colors${isSaving ? ' pointer-events-none opacity-50' : ''}`}>
+                                                    {uploadingRequirementId === requirement.id ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
+                                                    {requirement.templateFileName ? requirement.templateFileName : `Upload Template`}
                                                     <input type="file" className="hidden" onChange={(e) => handleUploadTemplate(requirement.id, e.target.files?.[0])} />
                                                 </label>
-                                                {requirement.templateFileName && (
-                                                    <span className="text-xs font-bold text-secondary truncate">{requirement.templateFileName}</span>
-                                                )}
                                             </div>
                                         </div>
                                     ) : (
-                                        <div className="flex items-start justify-between gap-4">
-                                            <div className="flex items-start gap-3 min-w-0">
-                                                <div className="h-9 w-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
-                                                    <span className="text-xs font-black">{index + 1}</span>
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                <div className="h-6 w-6 rounded-lg bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
+                                                    <span className="text-[10px] font-black">{index + 1}</span>
                                                 </div>
                                                 <div className="min-w-0">
-                                                    <div className="flex flex-wrap items-center gap-2">
-                                                        <h4 className="text-sm font-black text-neutral-dark dark:text-white">{requirement.title || 'Untitled Requirement'}</h4>
-                                                        <span className={`rounded-full px-2 py-0.5 text-[9px] font-black ${requirement.isRequired ? 'bg-rose-50 text-rose-500 border border-rose-100' : 'bg-neutral-light text-secondary border border-neutral-medium'}`}>
+                                                    <div className="flex flex-wrap items-center gap-1.5">
+                                                        <h4 className="text-xs font-black text-neutral-dark dark:text-white">{requirement.title || 'Untitled Requirement'}</h4>
+                                                        <span className={`rounded-full px-1.5 py-0.5 text-[8px] font-black ${requirement.isRequired ? 'bg-rose-50 text-rose-500 border border-rose-100' : 'bg-neutral-light text-secondary border border-neutral-medium'}`}>
                                                             {requirement.isRequired ? 'Required' : 'Optional'}
                                                         </span>
                                                     </div>
-                                                    <p className="text-xs font-medium text-secondary mt-1 whitespace-pre-wrap">{requirement.description || 'No notes provided.'}</p>
+                                                    {requirement.description && (
+                                                        <p className="text-[11px] font-medium text-secondary mt-0.5 whitespace-pre-wrap">{requirement.description}</p>
+                                                    )}
                                                 </div>
                                             </div>
                                             {requirement.templateFileId || requirement.templateUrl ? (
                                                 <a
                                                     href={getDriveUrl(requirement.templateUrl || requirement.templateFileId)}
                                                     target="_blank"
-                                                    rel="noreferrer"
-                                                    className="flex-shrink-0 inline-flex items-center gap-2 rounded-xl bg-primary text-white px-3 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-primary-dark"
+                                                    rel="noopener noreferrer"
+                                                    className="p-1.5 text-primary hover:bg-primary/10 rounded-lg transition-all"
                                                 >
-                                                    <Download size={13} /> Template
+                                                    <ExternalLink size={14} />
                                                 </a>
                                             ) : (
-                                                <span className="flex-shrink-0 text-[10px] font-black text-secondary/40 uppercase tracking-widest">No template</span>
+                                                <div className="p-1.5 text-secondary dark:text-gray-500 opacity-20 dark:opacity-40"><ExternalLink size={14} /></div>
                                             )}
                                         </div>
                                     )}
@@ -445,7 +533,8 @@ const Library: React.FC = () => {
                                     value={selectedManual.notes}
                                     onChange={(e) => setDraftManual(prev => prev ? { ...prev, notes: e.target.value } : prev)}
                                     placeholder="Add common issues, reminders, client handling notes, or office-specific guidance..."
-                                    className="w-full min-h-[130px] resize-none rounded-xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 p-3 text-sm font-medium text-neutral-dark dark:text-white outline-none focus:border-primary"
+                                    disabled={isSaving}
+                                    className="w-full min-h-[130px] resize-none rounded-xl border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 p-3 text-sm font-medium text-neutral-dark dark:text-white outline-none focus:border-primary disabled:opacity-50"
                                 />
                             ) : (
                                 <p className="text-sm font-semibold leading-relaxed text-neutral-dark dark:text-white whitespace-pre-wrap">{selectedManual.notes || 'No common issues or reminders recorded yet.'}</p>
@@ -456,12 +545,11 @@ const Library: React.FC = () => {
 
                 {isEditing && (
                     <div className="px-8 py-4 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-t border-neutral-medium dark:border-gray-700 flex gap-3">
-                        <button onClick={() => selectedManualId ? openManual(manuals.find(item => item.id === selectedManualId) || selectedManual) : closeDrawer()} className="flex-1 rounded-xl border border-neutral-medium px-4 py-3 text-[10px] font-black uppercase tracking-widest text-secondary hover:bg-neutral-light transition-colors">
+                        <button onClick={() => selectedManualId ? openManual(manuals.find(item => item.id === selectedManualId) || selectedManual) : closeDrawer()} disabled={isSaving || !!uploadingRequirementId} className="flex-1 rounded-xl border border-neutral-medium px-4 py-3 text-[10px] font-black uppercase tracking-widest text-secondary hover:bg-neutral-light transition-colors disabled:opacity-50">
                             Cancel
                         </button>
                         <button onClick={handleSave} disabled={isSaving} className="flex-[2] rounded-xl bg-primary px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white hover:bg-primary-dark shadow-xl shadow-primary/20 disabled:opacity-50 flex items-center justify-center gap-2">
-                            {isSaving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                            Save Manual
+                            {isSaving ? <><Loader2 size={14} className="animate-spin" /> Saving...</> : <><CheckCircle2 size={14} /> Save Manual</>}
                         </button>
                     </div>
                 )}
@@ -470,7 +558,7 @@ const Library: React.FC = () => {
     ) : null;
 
     return (
-        <div className="w-full mx-auto p-2 space-y-4 animate-in fade-in duration-700">
+        <div className="w-full mx-auto p-2 space-y-2 animate-in fade-in duration-700">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2 px-1">
                 <div className="space-y-0.5">
                     <div className="flex items-center gap-2.5">
@@ -486,15 +574,18 @@ const Library: React.FC = () => {
             <div className="bg-white dark:bg-gray-800 p-1.5 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm shadow-neutral-dark/5">
                 <div className="flex flex-col md:flex-row md:items-center gap-2">
                     <div className="relative group flex-1">
-                        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-secondary/40 group-focus-within:text-primary transition-colors" size={16} />
+                        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-secondary/40 dark:text-gray-400/60 group-focus-within:text-primary transition-colors" size={16} />
                         <input
                             type="text"
                             placeholder="Search service manuals..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2 bg-neutral-light/50 dark:bg-gray-900/50 border border-transparent focus:border-primary/20 rounded-xl text-[13px] font-medium text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all placeholder:text-secondary/30"
+                            className="w-full pl-10 pr-4 py-2 bg-neutral-light/50 dark:bg-gray-900/50 border border-transparent focus:border-primary/20 rounded-xl text-[13px] font-medium text-neutral-dark dark:text-white outline-none focus:ring-4 focus:ring-primary/5 transition-all placeholder:text-secondary/30 dark:placeholder:text-gray-500"
                         />
                     </div>
+
+                    <div className="w-px h-6 bg-neutral-medium dark:bg-gray-700 mx-1 hidden md:block" />
+
                     {canEdit && (
                         <button
                             onClick={openNewManual}
@@ -507,7 +598,7 @@ const Library: React.FC = () => {
             </div>
 
             <div className="bg-white dark:bg-gray-800 rounded-2xl border border-neutral-medium dark:border-gray-700 shadow-sm overflow-hidden">
-                <div className="grid grid-cols-[1.6fr_0.7fr_0.9fr_0.4fr] gap-4 px-5 py-3 border-b border-neutral-medium dark:border-gray-700 text-[10px] font-black uppercase tracking-[0.25em] text-secondary">
+                <div className="grid grid-cols-[1.6fr_0.7fr_0.9fr_0.4fr] gap-4 px-5 py-3 border-b border-neutral-medium dark:border-gray-700 text-[9px] font-black uppercase tracking-widest text-secondary dark:text-gray-400">
                     <span>Manual</span>
                     <span>Requirements</span>
                     <span>Last Updated</span>
@@ -522,14 +613,14 @@ const Library: React.FC = () => {
                             tabIndex={0}
                             onClick={() => openManual(manual)}
                             onKeyDown={(e) => e.key === 'Enter' && openManual(manual)}
-                            className="w-full grid grid-cols-[1.6fr_0.7fr_0.9fr_0.4fr] gap-4 px-5 py-4 text-left border-b border-neutral-medium/70 dark:border-gray-700/70 last:border-b-0 hover:bg-primary/5 transition-colors cursor-pointer"
+                            className="w-full grid grid-cols-[1.6fr_0.7fr_0.9fr_0.4fr] gap-4 px-5 py-2.5 text-left border-b border-neutral-medium/30 dark:border-gray-700/30 last:border-b-0 group cursor-pointer transition-all duration-300 hover:bg-primary/[0.02] dark:hover:bg-primary/[0.05] relative hover:z-[10]"
                         >
                             <div className="flex items-center gap-3 min-w-0">
-                                <div className="h-10 w-10 rounded-2xl bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
+                                <div className="h-8 w-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
                                     <BookOpen size={18} />
                                 </div>
                                 <div className="min-w-0">
-                                    <p className="text-sm font-black text-neutral-dark dark:text-white truncate">{manual.title || 'Untitled Manual'}</p>
+                                    <p className="text-[13px] font-black text-neutral-dark dark:text-white truncate group-hover:text-primary transition-colors">{manual.title || 'Untitled Manual'}</p>
                                     <p className="text-[10px] font-bold text-secondary truncate">{manual.overview || 'No overview recorded yet.'}</p>
                                 </div>
                             </div>
@@ -547,7 +638,7 @@ const Library: React.FC = () => {
                                             handleDelete(manual);
                                         }}
                                         disabled={deletingId === manual.id}
-                                        className="h-9 w-9 rounded-xl border border-rose-100 bg-rose-50 text-rose-500 hover:bg-rose-100 disabled:opacity-50 flex items-center justify-center"
+                                        className="p-1.5 rounded-lg text-secondary dark:text-gray-400 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-500/10 disabled:opacity-50 flex items-center justify-center transition-all"
                                         title="Delete manual"
                                     >
                                         {deletingId === manual.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={15} />}
@@ -558,8 +649,14 @@ const Library: React.FC = () => {
                     );
                 }) : (
                     <div className="py-16 text-center">
-                        <BookOpen size={24} className="mx-auto mb-3 text-secondary/30" />
-                        <p className="text-xs font-black uppercase tracking-widest text-secondary/50">No library manuals found</p>
+                        <div className="relative inline-flex mb-4">
+                            <BookOpen size={32} className="text-primary/15 dark:text-primary/10" />
+                            <Search className="absolute bottom-0 right-0 text-primary/30" size={24} />
+                        </div>
+                        <h3 className="text-xl font-black text-neutral-dark dark:text-white tracking-tight">No library manuals found</h3>
+                        <p className="text-sm text-secondary/60 font-medium mt-1">
+                            {searchQuery ? "No records match your search query." : "There are no service manuals recorded in the system yet."}
+                        </p>
                     </div>
                 )}
             </div>

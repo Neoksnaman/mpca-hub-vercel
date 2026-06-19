@@ -855,9 +855,10 @@ app.delete('/api/delete-file/:fileId', async (req, res) => {
     const { fileId } = req.params;
     const db = await getMongoDb();
     const requestUser = await getRequestUser(req);
-    const [transmittal, meeting] = await Promise.all([
+    const [transmittal, meeting, userWithAvatar] = await Promise.all([
       db.collection<any>('transmittals').findOne({ receiptUrl: fileId }, { projection: { userID: 1 } }),
-      db.collection<any>('meetings').findOne({ momUrl: fileId }, { projection: { userIDs: 1 } })
+      db.collection<any>('meetings').findOne({ momUrl: fileId }, { projection: { userIDs: 1 } }),
+      db.collection<any>('users').findOne({ avatarUrl: { $regex: fileId } }, { projection: { _id: 1 } })
     ]);
 
     if (transmittal && !canDeleteTransmittalRecord(requestUser, transmittal)) {
@@ -868,9 +869,12 @@ app.delete('/api/delete-file/:fileId', async (req, res) => {
       return res.status(403).json({ error: 'Only Admin, Manager, Supervisor, or Senior can delete meeting files' });
     }
 
-    if (!transmittal && !meeting) {
-      return res.status(403).json({ error: 'File is not linked to a deletable record' });
+    if (userWithAvatar) {
+      return res.status(403).json({ error: 'Cannot delete an active user avatar' });
     }
+    
+    // We allow deletion of orphaned files (e.g. from cancelled library uploads) 
+    // as long as they aren't linked to a protected record where the user lacks permission.
 
     console.log(`[Drive] Deleting file: ${fileId}`);
     await drive.files.delete({ fileId });

@@ -127,6 +127,8 @@ export const MOCK_TRANSMITTALS: any[] = [
 ];
 
 
+export const MAX_TEMPLATE_SIZE = 5 * 1024 * 1024; // 5 MB
+
 export const NAV_LINKS = [
   { name: 'Dashboard', path: '/dashboard', icon: Home },
   {
