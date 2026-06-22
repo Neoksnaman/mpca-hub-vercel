@@ -19,6 +19,37 @@ const formatTime = (value: string) => {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
+const getLocalDateKey = (value: string) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatMessageDateLabel = (dateKey: string) => {
+  if (!dateKey) return '';
+  const [year, month, day] = dateKey.split('-').map(Number);
+  if (!year || !month || !day) return '';
+
+  const messageDate = new Date(year, month - 1, day);
+  const today = new Date();
+  const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const yesterdayDate = new Date(todayDate);
+  yesterdayDate.setDate(todayDate.getDate() - 1);
+
+  if (messageDate.getTime() === todayDate.getTime()) return 'Today';
+  if (messageDate.getTime() === yesterdayDate.getTime()) return 'Yesterday';
+
+  return messageDate.toLocaleDateString([], {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  });
+};
+
 const fullName = (user?: User) => user ? `${user.firstName} ${user.lastName}`.trim() : 'Unknown User';
 const CHAT_POLLING_FALLBACK_ENABLED = true;
 const CHAT_POLLING_FALLBACK_INTERVAL_MS = 5 * 60 * 1000;
@@ -1095,99 +1126,111 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                     </button>
                   </div>
                 )}
-                {messages.map(message => {
+                {messages.map((message, index) => {
                   const mine = String(message.senderUserID) === String(currentUser.id);
                   const readIndicatorUsers = readIndicatorsByMessageId.get(message.id) || [];
                   const reactionSummary = getReactionSummary(message);
                   const myReaction = (message.reactions || []).find(item => String(item.userId) === String(currentUser.id))?.reaction || '';
                   const isStickerMessage = message.messageType === 'sticker';
+                  const dateKey = getLocalDateKey(message.createdAt);
+                  const previousDateKey = index > 0 ? getLocalDateKey(messages[index - 1].createdAt) : '';
+                  const dateLabel = dateKey && dateKey !== previousDateKey ? formatMessageDateLabel(dateKey) : '';
                   return (
-                    <div key={message.id} className={`group/message flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                      <div className={`relative max-w-[78%] ${mine ? 'items-end' : 'items-start'}`}>
-                        <div ref={reactionPickerMessageId === message.id ? reactionPickerRef : undefined} className={`absolute top-1/2 z-20 -translate-y-1/2 ${mine ? '-left-9' : '-right-9'}`}>
-                          {reactionPickerMessageId === message.id && (
-                            <div className={`absolute flex rounded-full border border-neutral-medium bg-white p-1 shadow-xl dark:border-gray-700 dark:bg-gray-800 ${reactionPickerDirection === 'top' ? 'bottom-9' : 'top-9'} ${reactionPickerHorizontal === 'left' ? 'right-0' : 'left-0'}`}>
-                              {CHAT_REACTIONS.map(reaction => (
-                                <button
-                                  key={reaction}
-                                  type="button"
-                                  disabled={savingReactionId === message.id}
-                                  onClick={() => handleReaction(message, reaction)}
-                                  className={`h-8 w-8 rounded-full text-base transition-transform hover:scale-125 disabled:opacity-50 ${myReaction === reaction ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}
-                                  title={myReaction === reaction ? 'Remove reaction' : `React ${reaction}`}
-                                >
-                                  {reaction}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                          <button
-                            type="button"
-                            onClick={(event) => toggleReactionPicker(message.id, event, mine)}
-                            className={`h-7 w-7 rounded-full border border-neutral-medium bg-white text-secondary shadow-md transition-all hover:border-primary hover:text-primary dark:border-gray-700 dark:bg-gray-800 ${reactionPickerMessageId === message.id ? 'opacity-100 scale-100' : 'opacity-0 scale-95 group-hover/message:opacity-100 group-hover/message:scale-100'}`}
-                            title="React to message"
-                          >
-                            <Smile size={14} className="mx-auto" />
-                          </button>
+                    <React.Fragment key={message.id}>
+                      {dateLabel && (
+                        <div className="flex justify-center py-1">
+                          <span className="rounded-full border border-neutral-medium/70 bg-white/85 px-3 py-1 text-[10px] font-black tracking-wide text-secondary shadow-sm dark:border-gray-700 dark:bg-gray-800/85 dark:text-gray-300">
+                            {dateLabel}
+                          </span>
                         </div>
-                        <div className={`rounded-2xl shadow-sm ${isStickerMessage ? 'px-3 py-3' : 'px-4 py-2'} ${reactionSummary.length > 0 ? 'pb-4' : ''} ${mine ? 'bg-primary text-white rounded-br-md' : 'bg-white dark:bg-gray-800 text-neutral-dark dark:text-white border border-neutral-medium/70 dark:border-gray-700 rounded-bl-md'}`}>
-                          {!mine && <p className="text-[9px] font-black text-secondary mb-1">{fullName(userById.get(String(message.senderUserID)))}</p>}
-                          {isStickerMessage ? (
-                            <div className="flex min-w-[118px] flex-col items-center gap-1.5">
-                              <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-white/90 text-5xl shadow-inner ring-1 ring-black/5 dark:bg-gray-900/60">
-                                {message.stickerEmoji || '\u{1F4AC}'}
-                              </div>
-                              <p className={`text-center text-[10px] font-black uppercase tracking-wider ${mine ? 'text-white/90' : 'text-secondary dark:text-gray-400'}`}>
-                                {message.stickerLabel || message.message}
-                              </p>
-                            </div>
-                          ) : (
-                            <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap break-words">{renderMessageText(message, mine)}</p>
-                          )}
-                          <p className={`text-[9px] font-bold mt-1 ${mine ? 'text-right text-white/70' : 'text-secondary/60'}`}>{formatTime(message.createdAt)}</p>
-                        </div>
-                        {reactionSummary.length > 0 && (
-                          <div className={`absolute -bottom-3 flex ${mine ? 'right-2 justify-end' : 'left-2 justify-start'}`}>
-                            {reactionSummary.length === 1 ? reactionSummary.map(item => (
-                              <button
-                                key={item.reaction}
-                                type="button"
-                                onClick={() => item.mine && handleReaction(message, item.reaction)}
-                                className={`flex h-6 min-w-6 items-center justify-center rounded-full border bg-white px-1 text-[11px] font-black shadow-sm transition-colors dark:bg-gray-800 ${item.mine ? 'border-primary/40 text-primary hover:bg-primary/10' : 'border-neutral-medium text-secondary dark:border-gray-700'}`}
-                                title={item.userNames.join(', ')}
-                              >
-                                <span>{item.reaction}</span>{item.count > 1 ? <span className="ml-0.5 text-[8px]">{item.count}</span> : ''}
-                              </button>
-                            )) : (
-                              <div className="flex rounded-full border border-neutral-medium bg-white px-1.5 py-0.5 text-[10px] font-black text-secondary shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                                {reactionSummary.map(item => (
+                      )}
+                      <div className={`group/message flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                        <div className={`relative max-w-[78%] ${mine ? 'items-end' : 'items-start'}`}>
+                          <div ref={reactionPickerMessageId === message.id ? reactionPickerRef : undefined} className={`absolute top-1/2 z-20 -translate-y-1/2 ${mine ? '-left-9' : '-right-9'}`}>
+                            {reactionPickerMessageId === message.id && (
+                              <div className={`absolute flex rounded-full border border-neutral-medium bg-white p-1 shadow-xl dark:border-gray-700 dark:bg-gray-800 ${reactionPickerDirection === 'top' ? 'bottom-9' : 'top-9'} ${reactionPickerHorizontal === 'left' ? 'right-0' : 'left-0'}`}>
+                                {CHAT_REACTIONS.map(reaction => (
                                   <button
-                                    key={item.reaction}
+                                    key={reaction}
                                     type="button"
-                                    onClick={() => item.mine && handleReaction(message, item.reaction)}
-                                    className={`flex h-5 items-center rounded-full px-1 transition-colors ${item.mine ? 'text-primary hover:bg-primary/10' : ''}`}
-                                    title={item.userNames.join(', ')}
+                                    disabled={savingReactionId === message.id}
+                                    onClick={() => handleReaction(message, reaction)}
+                                    className={`h-8 w-8 rounded-full text-base transition-transform hover:scale-125 disabled:opacity-50 ${myReaction === reaction ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}
+                                    title={myReaction === reaction ? 'Remove reaction' : `React ${reaction}`}
                                   >
-                                    <span>{item.reaction}</span>{item.count > 1 ? <span className="ml-0.5 text-[8px]">{item.count}</span> : ''}
+                                    {reaction}
                                   </button>
                                 ))}
                               </div>
                             )}
+                            <button
+                              type="button"
+                              onClick={(event) => toggleReactionPicker(message.id, event, mine)}
+                              className={`h-7 w-7 rounded-full border border-neutral-medium bg-white text-secondary shadow-md transition-all hover:border-primary hover:text-primary dark:border-gray-700 dark:bg-gray-800 ${reactionPickerMessageId === message.id ? 'opacity-100 scale-100' : 'opacity-0 scale-95 group-hover/message:opacity-100 group-hover/message:scale-100'}`}
+                              title="React to message"
+                            >
+                              <Smile size={14} className="mx-auto" />
+                            </button>
+                          </div>
+                          <div className={`rounded-2xl shadow-sm ${isStickerMessage ? 'px-3 py-3' : 'px-4 py-2'} ${reactionSummary.length > 0 ? 'pb-4' : ''} ${mine ? 'bg-primary text-white rounded-br-md' : 'bg-white dark:bg-gray-800 text-neutral-dark dark:text-white border border-neutral-medium/70 dark:border-gray-700 rounded-bl-md'}`}>
+                            {!mine && <p className="text-[9px] font-black text-secondary mb-1">{fullName(userById.get(String(message.senderUserID)))}</p>}
+                            {isStickerMessage ? (
+                              <div className="flex min-w-[118px] flex-col items-center gap-1.5">
+                                <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-white/90 text-5xl shadow-inner ring-1 ring-black/5 dark:bg-gray-900/60">
+                                  {message.stickerEmoji || '\u{1F4AC}'}
+                                </div>
+                                <p className={`text-center text-[10px] font-black uppercase tracking-wider ${mine ? 'text-white/90' : 'text-secondary dark:text-gray-400'}`}>
+                                  {message.stickerLabel || message.message}
+                                </p>
+                              </div>
+                            ) : (
+                              <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap break-words">{renderMessageText(message, mine)}</p>
+                            )}
+                            <p className={`text-[9px] font-bold mt-1 ${mine ? 'text-right text-white/70' : 'text-secondary/60'}`}>{formatTime(message.createdAt)}</p>
+                          </div>
+                          {reactionSummary.length > 0 && (
+                            <div className={`absolute -bottom-3 flex ${mine ? 'right-2 justify-end' : 'left-2 justify-start'}`}>
+                              {reactionSummary.length === 1 ? reactionSummary.map(item => (
+                                <button
+                                  key={item.reaction}
+                                  type="button"
+                                  onClick={() => item.mine && handleReaction(message, item.reaction)}
+                                  className={`flex h-6 min-w-6 items-center justify-center rounded-full border bg-white px-1 text-[11px] font-black shadow-sm transition-colors dark:bg-gray-800 ${item.mine ? 'border-primary/40 text-primary hover:bg-primary/10' : 'border-neutral-medium text-secondary dark:border-gray-700'}`}
+                                  title={item.userNames.join(', ')}
+                                >
+                                  <span>{item.reaction}</span>{item.count > 1 ? <span className="ml-0.5 text-[8px]">{item.count}</span> : ''}
+                                </button>
+                              )) : (
+                                <div className="flex rounded-full border border-neutral-medium bg-white px-1.5 py-0.5 text-[10px] font-black text-secondary shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                                  {reactionSummary.map(item => (
+                                    <button
+                                      key={item.reaction}
+                                      type="button"
+                                      onClick={() => item.mine && handleReaction(message, item.reaction)}
+                                      className={`flex h-5 items-center rounded-full px-1 transition-colors ${item.mine ? 'text-primary hover:bg-primary/10' : ''}`}
+                                      title={item.userNames.join(', ')}
+                                    >
+                                      <span>{item.reaction}</span>{item.count > 1 ? <span className="ml-0.5 text-[8px]">{item.count}</span> : ''}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        {readIndicatorUsers.length > 0 && (
+                          <div className={`${reactionSummary.length > 0 ? 'mt-3' : 'mt-1'} w-full flex justify-end pr-1`}>
+                            <div className="flex items-center gap-0.5">
+                              {readIndicatorUsers.slice(0, 5).map(user => (
+                                <span key={user.id} title={`${fullName(user)} read this message`} className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white ring-1 ring-white dark:bg-gray-900 dark:ring-gray-900">
+                                  {renderChatAvatar(user, fullName(user), 'w-4 h-4', 'text-[7px]', false)}
+                                </span>
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>
-                      {readIndicatorUsers.length > 0 && (
-                        <div className={`${reactionSummary.length > 0 ? 'mt-3' : 'mt-1'} w-full flex justify-end pr-1`}>
-                          <div className="flex items-center gap-0.5">
-                            {readIndicatorUsers.slice(0, 5).map(user => (
-                              <span key={user.id} title={`${fullName(user)} read this message`} className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white ring-1 ring-white dark:bg-gray-900 dark:ring-gray-900">
-                                {renderChatAvatar(user, fullName(user), 'w-4 h-4', 'text-[7px]', false)}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    </React.Fragment>
                   );
                 })}
               </>
