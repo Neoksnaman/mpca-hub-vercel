@@ -1,0 +1,35 @@
+[
+  {
+    "version": "1.5.0",
+    "date": "June 24, 2026",
+    "title": "Office Chat, Mentions & Reactions",
+    "changes": [
+      "Added direct and group office chat with unread indicators and live updates.",
+      "Added @mentions, @All mentions, message reactions, stickers, and emoji support.",
+      "Added online status indicators for user avatars across the workspace.",
+      "Added date boundaries in chat conversations for Today, Yesterday, and older message dates."
+    ]
+  },
+  {
+    "version": "1.4.0",
+    "date": "June 24, 2026",
+    "title": "Audit Logs & Workspace Transparency",
+    "changes": [
+      "Added audit logs for retainers, special projects, clients, transmittals, meetings, and library manuals.",
+      "Added expandable audit log details showing only changed fields for cleaner review.",
+      "Added Admin Console audit log viewing with filters for audit review.",
+      "Improved filing history labels by renaming Historical Audit Trail to Previous Filings."
+    ]
+  },
+  {
+    "version": "1.3.0",
+    "date": "June 24, 2026",
+    "title": "MongoDB Migration, Faster Pages & UI Refresh",
+    "changes": [
+      "Migrated core app data from Google Sheets to MongoDB while keeping Google Drive uploads unchanged.",
+      "Improved page performance with optimized data loading, pagination, and faster navigation.",
+      "Redesigned Retainers, Special Projects, Clients, Operations, Settings, Reports, and Dashboard views.",
+      "Added the Library section for service manuals, requirements, templates, and office guidance."
+    ]
+  }
+]

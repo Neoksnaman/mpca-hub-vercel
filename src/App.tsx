@@ -15,6 +15,13 @@ import { User, AppData, RetainerEngagement, SpecialEngagement, TaxCompliance, Cl
 import { fetchAllData, logout as apiLogout } from './services/googleSheetsService';
 import { Loader2, CheckCircle2, AlertCircle, X } from 'lucide-react';
 
+type ChangelogEntry = {
+  version: string;
+  date: string;
+  title: string;
+  changes: string[];
+};
+
 interface AppContextType extends AppData {
   theme: 'light' | 'dark';
   toggleTheme: () => void;
@@ -34,6 +41,7 @@ interface AppContextType extends AppData {
 export const AppContext = createContext<AppContextType | null>(null);
 
 const IDLE_RELOAD_TIMEOUT_MS = 30 * 60 * 1000;
+const CHANGELOG_STORAGE_KEY = 'mpca_changelog_seen_version';
 
 const RootRedirect: React.FC = () => {
   const startTab = localStorage.getItem('startTab') || 'dashboard';
@@ -77,6 +85,9 @@ const App: React.FC = () => {
   const [isIdlePollingPaused, setIsIdlePollingPaused] = useState(false);
   const [onlineUserIDs, setOnlineUserIDs] = useState<Set<string>>(new Set());
   const [ablyRealtime, setAblyRealtime] = useState<Ably.Realtime | null>(null);
+  const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
+  const [hasCheckedChangelog, setHasCheckedChangelog] = useState(false);
+  const [activeChangelog, setActiveChangelog] = useState<ChangelogEntry | null>(null);
 
   const playAudioCue = useCallback((type: 'success' | 'click' | 'chime', force = false) => {
     const isSoundEnabled = localStorage.getItem('pref_sound') !== 'false';
@@ -162,6 +173,7 @@ const App: React.FC = () => {
     try {
       const data = await fetchAllData();
       setAppData(data);
+      setHasLoadedInitialData(true);
     } catch (err: any) {
       if (err.message.includes('401') || err.message.toLowerCase().includes('unauthorized')) {
           handleLogout();
@@ -178,6 +190,9 @@ const App: React.FC = () => {
       } finally {
           document.title = 'MPCA Hub | Internal Operations';
           setUser(null);
+          setHasLoadedInitialData(false);
+          setHasCheckedChangelog(false);
+          setActiveChangelog(null);
           localStorage.removeItem('user');
       }
   }, []);
@@ -188,14 +203,60 @@ const App: React.FC = () => {
           localStorage.setItem('user', JSON.stringify(u));
       } else {
           localStorage.removeItem('user');
+          setHasLoadedInitialData(false);
+          setHasCheckedChangelog(false);
+          setActiveChangelog(null);
       }
   };
 
   useEffect(() => {
       if (user) {
           refreshData();
+      } else {
+          setHasLoadedInitialData(false);
+          setHasCheckedChangelog(false);
+          setActiveChangelog(null);
       }
   }, [user, refreshData]);
+
+  useEffect(() => {
+      if (!user || !hasLoadedInitialData || hasCheckedChangelog) return;
+
+      let cancelled = false;
+
+      const loadChangelog = async () => {
+          try {
+              const response = await fetch('/changelog.json', { cache: 'no-store' });
+              if (!response.ok) return;
+              const entries = await response.json();
+              if (!Array.isArray(entries) || entries.length === 0) return;
+
+              const latest = entries[0] as ChangelogEntry;
+              if (!latest?.version || !latest?.title || !Array.isArray(latest?.changes)) return;
+
+              const seenVersion = localStorage.getItem(CHANGELOG_STORAGE_KEY);
+              if (!cancelled && seenVersion !== latest.version) {
+                  setActiveChangelog(latest);
+              }
+          } catch (error) {
+          } finally {
+              if (!cancelled) setHasCheckedChangelog(true);
+          }
+      };
+
+      loadChangelog();
+
+      return () => {
+          cancelled = true;
+      };
+  }, [user, hasLoadedInitialData, hasCheckedChangelog]);
+
+  const dismissChangelog = (rememberVersion: boolean) => {
+      if (rememberVersion && activeChangelog?.version) {
+          localStorage.setItem(CHANGELOG_STORAGE_KEY, activeChangelog.version);
+      }
+      setActiveChangelog(null);
+  };
 
   useEffect(() => {
       if (!user) {
@@ -374,6 +435,67 @@ const App: React.FC = () => {
                 >
                   <X size={14} />
                 </button>
+              </div>
+            </div>
+          )}
+
+          {user && activeChangelog && (
+            <div className="fixed inset-0 z-[21000] flex items-center justify-center bg-black/35 p-4 backdrop-blur-[2px] animate-in fade-in duration-200">
+              <div className="w-full max-w-lg overflow-hidden rounded-[2rem] border border-neutral-medium bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900 animate-in zoom-in-95 slide-in-from-bottom-4 duration-300">
+                <div className="flex items-start justify-between gap-4 border-b border-neutral-medium/70 px-6 py-5 dark:border-gray-700">
+                  <div className="min-w-0">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span className="rounded-md bg-primary/10 px-2 py-1 text-[10px] font-black uppercase tracking-widest text-primary">
+                        Version {activeChangelog.version}
+                      </span>
+                      <span className="text-[11px] font-bold text-secondary dark:text-gray-400">
+                        {activeChangelog.date}
+                      </span>
+                    </div>
+                    <h2 className="text-xl font-black tracking-tight text-neutral-dark dark:text-white">
+                      {activeChangelog.title}
+                    </h2>
+                    <p className="mt-1 text-xs font-semibold text-secondary dark:text-gray-400">
+                      Here are the latest updates in MPCA Hub.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => dismissChangelog(false)}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-secondary transition-colors hover:bg-neutral-light hover:text-primary dark:hover:bg-gray-800"
+                    title="Remind me later"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="px-6 py-5">
+                  <ul className="space-y-3">
+                    {activeChangelog.changes.map((change, index) => (
+                      <li key={`${activeChangelog.version}-${index}`} className="flex gap-3 text-sm font-semibold leading-relaxed text-neutral-dark dark:text-gray-100">
+                        <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary/80" />
+                        <span>{change}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="flex flex-col-reverse gap-2 border-t border-neutral-medium/70 bg-neutral-light/40 px-6 py-4 dark:border-gray-700 dark:bg-gray-950/30 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => dismissChangelog(false)}
+                    className="rounded-xl border border-neutral-medium px-4 py-2.5 text-[11px] font-black uppercase tracking-widest text-secondary transition-colors hover:border-primary/30 hover:text-primary dark:border-gray-700"
+                  >
+                    Remind Me Later
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => dismissChangelog(true)}
+                    className="rounded-xl bg-primary px-5 py-2.5 text-[11px] font-black uppercase tracking-widest text-white shadow-lg shadow-primary/20 transition-colors hover:bg-primary-dark"
+                  >
+                    Got It
+                  </button>
+                </div>
               </div>
             </div>
           )}
