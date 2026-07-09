@@ -19,7 +19,7 @@ const SingleSlip = ({ transmittal, client, staffMember, logoUrl, copyType, forma
                 <div className="text-right text-[9px] font-bold leading-tight italic pt-1">
                     <p>Unit 301, West Insula Building,</p>
                     <p>#135 West Avenue Brgy. Bungad, Quezon City</p>
-                    <p>Tel No. (02) 8800-5415</p>
+                    <p>Tel No. (02) 8800-5413</p>
                 </div>
             </div>
 

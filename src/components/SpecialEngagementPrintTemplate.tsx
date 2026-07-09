@@ -110,7 +110,7 @@ export const SpecialEngagementPrintTemplate = forwardRef<HTMLDivElement, Special
           <div className="text-right text-[10px] text-gray-600 font-bold leading-normal pt-1">
             <p>Unit 301, West Insula Building,</p>
             <p>#135 West Avenue Brgy. Bungad, Quezon City</p>
-            <p>Tel No. (02) 8800-5415 | Email: info@mpcamaso.com</p>
+            <p>Tel No. (02) 8800-5413 | Email: businessprocess@mpca.com.ph</p>
           </div>
         </div>
 
