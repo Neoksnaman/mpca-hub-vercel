@@ -1,10 +1,10 @@
 [
   {
-    "version": "1.6.0",
+    "version": "1.6.1",
     "date": "July 9, 2026",
-    "title": "Special Engagement Print Reports",
+    "title": "Printing of Reports",
     "changes": [
-      "Added professional print/PDF export functionality for Special Engagements inside the details drawer.",
+      "Added professional print/PDF export functionality for Clients and Special Engagements.",
       "Included client name, project metadata, description brief, and chronological activity logs with dates in reports.",
       "Optimized multi-page print layouts with standard margins, aligned columns, and auto-repeating table headers."
     ]

@@ -1,11 +1,13 @@
-import React, { useContext, useMemo, useState, useEffect } from 'react';
+import React, { useContext, useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { AppContext } from '../App';
 import UserHoverCard from '../components/UserHoverCard';
-import { Search, User as UserIcon, Building2, ChevronRight, ChevronLeft, ChevronDown, FileText, Briefcase, Plus, X, Loader2, CheckCircle2, AlertCircle, Eye, Calendar, UserPlus, Shield, Edit2, Trash2, Layers, ArrowUpRight, Copy } from 'lucide-react';
+import { Search, User as UserIcon, Building2, ChevronRight, ChevronLeft, ChevronDown, FileText, Briefcase, Plus, X, Loader2, CheckCircle2, AlertCircle, Eye, Calendar, UserPlus, Shield, Edit2, Trash2, Layers, ArrowUpRight, Copy, Printer } from 'lucide-react';
 import { UserRole } from '../types';
 import { canViewClient } from '../utils/rbac';
+import { useReactToPrint } from 'react-to-print';
+import { ClientsPrintTemplate } from '../components/ClientsPrintTemplate';
 import { addClient, addRetainer, updateClient, updateRetainer, deleteRetainer, addSpecial, updateSpecial, deleteSpecial, addCredential, updateCredential, deleteCredential, addNotification, fetchAuditLogs } from '../services/googleSheetsService';
 
 const normalizeId = (id: any) => String(id || '').replace(/^0+(?!$)/, '').trim() || '0';
@@ -1441,6 +1443,12 @@ const Clients: React.FC = () => {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
 
+    const printRef = useRef<HTMLDivElement>(null);
+    const handlePrint = useReactToPrint({
+        contentRef: printRef,
+        documentTitle: `Clients_Report_${new Date().toISOString().split('T')[0]}`
+    });
+
     const location = useLocation();
 
     const handleEngagementFilterChange = (engagement: string) => {
@@ -2701,13 +2709,23 @@ const Clients: React.FC = () => {
                 </div>
 
                 {isManagerOrAbove && (
-                    <button
-                        onClick={() => { setIsAddingClient(true); setIsAddModalOpen(true); }}
-                        className="flex items-center justify-center gap-2 px-4 py-2 bg-primary text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-lg shadow-primary/20 transition-all active:scale-95 self-start lg:self-center"
-                    >
-                        <Plus size={16} />
-                        Add Client
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-center">
+                        <button
+                            onClick={() => handlePrint()}
+                            className="flex items-center justify-center gap-2 px-4 py-2 bg-white dark:bg-gray-800 text-neutral-dark dark:text-white border border-neutral-medium dark:border-gray-700 rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-neutral-light dark:hover:bg-gray-700 shadow-sm transition-all active:scale-95"
+                            title="Print Filtered Report"
+                        >
+                            <Printer size={16} />
+                            Print Report
+                        </button>
+                        <button
+                            onClick={() => { setIsAddingClient(true); setIsAddModalOpen(true); }}
+                            className="flex items-center justify-center gap-2 px-4 py-2 bg-primary text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-primary-dark shadow-lg shadow-primary/20 transition-all active:scale-95"
+                        >
+                            <Plus size={16} />
+                            Add Client
+                        </button>
+                    </div>
                 )}
             </div>
 
@@ -3843,6 +3861,20 @@ const Clients: React.FC = () => {
                 </div>,
                 document.body
             )}
+
+            {/* Hidden Print Template */}
+            <div style={{ position: 'absolute', top: '-9999px', left: '-9999px', overflow: 'hidden' }}>
+                <ClientsPrintTemplate
+                    ref={printRef}
+                    clients={displayedClients}
+                    filters={clientFilters}
+                    groupBy={groupBy}
+                    searchQuery={searchQuery}
+                    currentUser={user}
+                    allUsers={allUsers}
+                    logoUrl="/logo.png"
+                />
+            </div>
         </div>
     );
 };
