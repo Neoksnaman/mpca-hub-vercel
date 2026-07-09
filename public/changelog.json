@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.6.0",
+    "date": "July 9, 2026",
+    "title": "Special Engagement Print Reports",
+    "changes": [
+      "Added professional print/PDF export functionality for Special Engagements inside the details drawer.",
+      "Included client name, project metadata, description brief, and chronological activity logs with dates in reports.",
+      "Optimized multi-page print layouts with standard margins, aligned columns, and auto-repeating table headers."
+    ]
+  },
+  {
     "version": "1.5.0",
     "date": "June 24, 2026",
     "title": "Office Chat, Mentions & Reactions",

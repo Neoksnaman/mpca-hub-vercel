@@ -23,11 +23,14 @@ import {
     ChevronDown,
     MoreVertical,
     Trash2,
-    AlertTriangle
+    AlertTriangle,
+    Printer
 } from 'lucide-react';
 import { UserRole, Status } from '../types';
 import { fetchAllData, addRetainerLog, updateRetainerLog, deleteRetainerLog, fetchAuditLogs, addTask, addActivity, updateTask, updateActivity, deleteActivity, deleteTask, updateSpecial, addNotification, fetchSpecialWorklog } from '../services/googleSheetsService';
 import { months, computeActualDueDate, parseDateStr } from '../utils/dateUtils';
+import { useReactToPrint } from 'react-to-print';
+import { SpecialEngagementPrintTemplate } from '../components/SpecialEngagementPrintTemplate';
 
 const normalizeId = (id: any) => String(id || '').trim().replace(/^0+/, '') || '0';
 
@@ -213,6 +216,13 @@ const Engagements: React.FC = () => {
         startDate: '',
         endDate: '',
         description: ''
+    });
+
+    const specialPrintRef = useRef<HTMLDivElement>(null);
+
+    const handleSpecialPrint = useReactToPrint({
+        contentRef: specialPrintRef,
+        documentTitle: selectedItem ? `Special_Engagement_${selectedItem.engagementName || selectedItem.projectTitle || 'Report'}` : 'Special_Engagement_Report'
     });
 
     // Auto-switch tab based on navigation state
@@ -1460,6 +1470,18 @@ const Engagements: React.FC = () => {
                 <div className="fixed inset-0 z-[10000] overflow-hidden">
                     <div className="absolute inset-0 bg-neutral-dark/40 backdrop-blur-sm transition-opacity" onClick={() => { setIsDetailOpen(false); setIsEditingDate(false); }} />
                     <div className="absolute inset-y-0 right-0 max-w-2xl w-full bg-white dark:bg-gray-900 shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
+                        {/* Hidden Print Template */}
+                        <div style={{ position: 'absolute', top: '-9999px', left: '-9999px', overflow: 'hidden' }}>
+                            {activeTab === 'Special' && (
+                                <SpecialEngagementPrintTemplate
+                                    ref={specialPrintRef}
+                                    engagement={selectedItem}
+                                    tasks={worklogTasks}
+                                    activities={worklogActivities}
+                                    logoUrl="/logo.png"
+                                />
+                            )}
+                        </div>
                         {/* Drawer Header */}
                         <div className="p-5 border-b border-neutral-medium dark:border-gray-800 flex items-start justify-between gap-4 bg-neutral-light/30 dark:bg-gray-800/30">
                             <div className="min-w-0">
@@ -1487,12 +1509,23 @@ const Engagements: React.FC = () => {
                                     </div>
                                 )}
                             </div>
-                            <button
-                                onClick={() => setIsDetailOpen(false)}
-                                className="p-2 hover:bg-neutral-medium/20 dark:hover:bg-gray-800 rounded-full transition-colors text-secondary"
-                            >
-                                <X size={20} />
-                            </button>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                                {activeTab === 'Special' && (
+                                    <button
+                                        onClick={() => handleSpecialPrint()}
+                                        className="p-2 hover:bg-neutral-medium/20 dark:hover:bg-gray-800 rounded-full transition-colors text-secondary hover:text-primary"
+                                        title="Print Report / Export PDF"
+                                    >
+                                        <Printer size={20} />
+                                    </button>
+                                )}
+                                <button
+                                    onClick={() => setIsDetailOpen(false)}
+                                    className="p-2 hover:bg-neutral-medium/20 dark:hover:bg-gray-800 rounded-full transition-colors text-secondary"
+                                >
+                                    <X size={20} />
+                                </button>
+                            </div>
                         </div>
 
                         {/* Drawer Body - Now with vibrant gradient background */}
