@@ -16,21 +16,56 @@ const CAMO_INTRO =
 const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 const MAX_CONTEXT_ITEMS = 40;
-const CAMO_PEEK_SESSION_KEY = 'mpca_camo_peek_seen';
+const CAMO_PEEK_SESSION_KEY = 'mpca_camo_peek_count';
+const CAMO_PEEK_DELAYS = [10000, 180000, 480000];
+const CAMO_PEEK_VISIBLE_MS = 7000;
+const CAMO_PEEK_MESSAGES = [
+  'Need help?',
+  'Ask Camo',
+  'Hoot hoot?',
+  'Quick question?',
+  'I can help',
+  'Need a draft?',
+  'Ask away',
+  "Camo's here",
+  'Wise move?',
+  'Tiny hoot?',
+  'Hoot for help?',
+  'Need wisdom?',
+  'Owl check?',
+  'Draft time?',
+  'Lost in tabs?',
+  'Need a clue?',
+  'Camo sees it',
+  'Work buddy?',
+  'One quick hoot?',
+  'Need a nudge?',
+  'Fresh eyes?',
+  'Ask the owl',
+  'Hoot if stuck',
+  'Plan it out?',
+  'Need a shortcut?',
+  'Tiny assist?',
+  'Let us solve it',
+  'Camo can help'
+];
 
-const hasSeenCamoPeek = () => {
+const getRandomCamoPeek = () => CAMO_PEEK_MESSAGES[Math.floor(Math.random() * CAMO_PEEK_MESSAGES.length)];
+
+const getCamoPeekCount = () => {
   try {
-    return sessionStorage.getItem(CAMO_PEEK_SESSION_KEY) === 'true';
+    const count = Number(sessionStorage.getItem(CAMO_PEEK_SESSION_KEY) || 0);
+    return Number.isFinite(count) ? count : 0;
   } catch {
-    return true;
+    return CAMO_PEEK_DELAYS.length;
   }
 };
 
-const markCamoPeekSeen = () => {
+const setCamoPeekCount = (count: number) => {
   try {
-    sessionStorage.setItem(CAMO_PEEK_SESSION_KEY, 'true');
+    sessionStorage.setItem(CAMO_PEEK_SESSION_KEY, String(count));
   } catch {
-    // Non-critical: the peek simply may appear again next page load.
+    // Non-critical: the peek schedule simply resets on the next page load.
   }
 };
 
@@ -373,6 +408,8 @@ const CamoChat: React.FC = () => {
   const [isHoveringLauncher, setIsHoveringLauncher] = useState(false);
   const [isWiggling, setIsWiggling] = useState(false);
   const [showPeek, setShowPeek] = useState(false);
+  const [peekMessage, setPeekMessage] = useState(getRandomCamoPeek);
+  const [peekCount, setPeekCount] = useState(getCamoPeekCount);
   const [draft, setDraft] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [messages, setMessages] = useState<CamoMessage[]>([
@@ -412,19 +449,25 @@ const CamoChat: React.FC = () => {
   }, [isHoveringLauncher, isOpen, officeChatOpen]);
 
   useEffect(() => {
-    if (isOpen || officeChatOpen || hasSeenCamoPeek()) return;
+    if (isOpen || officeChatOpen || isHoveringLauncher || peekCount >= CAMO_PEEK_DELAYS.length) return;
 
     const showTimer = window.setTimeout(() => {
+      setPeekMessage(getRandomCamoPeek());
       setShowPeek(true);
-      markCamoPeekSeen();
-    }, 3500);
-    const hideTimer = window.setTimeout(() => setShowPeek(false), 11500);
+      const nextCount = peekCount + 1;
+      setPeekCount(nextCount);
+      setCamoPeekCount(nextCount);
+    }, CAMO_PEEK_DELAYS[peekCount]);
 
-    return () => {
-      window.clearTimeout(showTimer);
-      window.clearTimeout(hideTimer);
-    };
-  }, [isOpen, officeChatOpen]);
+    return () => window.clearTimeout(showTimer);
+  }, [isHoveringLauncher, isOpen, officeChatOpen, peekCount]);
+
+  useEffect(() => {
+    if (!showPeek) return;
+
+    const hideTimer = window.setTimeout(() => setShowPeek(false), CAMO_PEEK_VISIBLE_MS);
+    return () => window.clearTimeout(hideTimer);
+  }, [showPeek]);
 
   const openCamo = () => {
     setShowPeek(false);
@@ -563,10 +606,9 @@ const CamoChat: React.FC = () => {
 
       {!isOpen && !officeChatOpen && (
         <div className="fixed bottom-5 right-5 z-[12000]">
-          {showPeek && (
-            <div className="absolute bottom-16 right-2 mb-2 w-40 rounded-2xl border border-neutral-medium bg-white px-4 py-3 text-sm font-bold text-neutral-dark shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white">
-              <p>Need help?</p>
-              <p className="text-xs font-semibold text-secondary dark:text-gray-400">Ask me anything.</p>
+          {showPeek && !isHoveringLauncher && (
+            <div className="absolute bottom-16 right-2 mb-2 whitespace-nowrap rounded-2xl border border-neutral-medium bg-white px-3.5 py-2 text-sm font-bold text-neutral-dark shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white">
+              <p>{peekMessage}</p>
             </div>
           )}
           <button
@@ -575,6 +617,7 @@ const CamoChat: React.FC = () => {
             onMouseEnter={() => {
               setIsHoveringLauncher(true);
               setIsWiggling(false);
+              setShowPeek(false);
             }}
             onMouseLeave={() => setIsHoveringLauncher(false)}
             className={`group relative flex h-16 w-16 items-center justify-center rounded-full bg-transparent p-0 transition-transform duration-200 hover:-translate-y-0.5 hover:rotate-[-4deg] hover:scale-110 ${

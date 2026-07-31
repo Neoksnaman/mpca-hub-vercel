@@ -211,6 +211,7 @@ const App: React.FC = () => {
           setHasCheckedChangelog(false);
           setActiveChangelog(null);
           localStorage.removeItem('user');
+          sessionStorage.clear();
       }
   }, []);
 
