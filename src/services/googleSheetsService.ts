@@ -394,3 +394,35 @@ export const uploadAvatar = (avatarDataUrl: string, username: string) =>
 
 export const checkDeadlines = () =>
     apiCall<{ success: boolean; message: string }>('/api/check-deadlines', { method: 'POST' });
+
+export const searchSecCompany = (mode: 'registration' | 'name', query: string) =>
+    apiCall<any>(`/api/govt-hub/sec/company/${mode}?query=${encodeURIComponent(query)}`);
+
+export const verifyBirTin = (data: {
+    tin: string;
+    firstName: string;
+    middleName?: string;
+    lastName: string;
+    gender: string;
+    birthdate: string;
+}) =>
+    apiCall<any>('/api/govt-hub/bir/tin-verifier', {
+        method: 'POST',
+        body: JSON.stringify(data)
+    });
+
+export const verifyBirLoa = (data: {
+    tin: string;
+    registeredName?: string;
+    auditCase: string;
+}) =>
+    apiCall<any>('/api/govt-hub/bir/loa-verifier', {
+        method: 'POST',
+        body: JSON.stringify(data)
+    });
+
+export const sendCamoMessage = (messages: Array<{ role: 'assistant' | 'user'; content: string }>, mpcaContext?: any) =>
+    apiCall<{ reply: string }>('/api/camo/chat', {
+        method: 'POST',
+        body: JSON.stringify({ messages, mpcaContext })
+    });

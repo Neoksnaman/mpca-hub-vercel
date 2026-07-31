@@ -1,6 +1,6 @@
 
 import { UserRole, Status, Task, EngagementCategory } from './types';
-import { Home, Users, CheckSquare, FileText, Briefcase, BarChart2, Settings, BookOpen } from 'lucide-react';
+import { Home, Users, CheckSquare, FileText, Briefcase, BarChart2, Settings, BookOpen, Landmark } from 'lucide-react';
 
 export const MOCK_USER: any = {
   id: 'user-1',
@@ -148,6 +148,15 @@ export const NAV_LINKS = [
     children: [
       { name: 'Transmittals', path: '/transmittals', icon: FileText },
       { name: 'Meetings', path: '/meetings', icon: Users },
+    ],
+  },
+  {
+    name: "Gov't Hub",
+    path: '/govt-hub/sec',
+    icon: Landmark,
+    children: [
+      { name: 'S.E.C', path: '/govt-hub/sec', icon: FileText },
+      { name: 'B.I.R', path: '/govt-hub/bir', icon: FileText },
     ],
   },
   { name: 'Library', path: '/library', icon: BookOpen },

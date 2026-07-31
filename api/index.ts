@@ -26,6 +26,16 @@ const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
 const ROOT_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 const MONGODB_URI = process.env.MONGODB_URI;
 const ABLY_API_KEY = process.env.ABLY_API_KEY;
+const GOVT_HUB_BASE_URL = process.env.GOVT_HUB_BASE_URL || '';
+const GOVT_HUB_TOKEN = process.env.GOVT_HUB_TOKEN || '';
+const CAMO_AI_API_KEY = process.env.CAMO_AI_API_KEY || '';
+const CAMO_AI_MODEL = process.env.CAMO_AI_MODEL || 'gemini-3.5-flash-lite';
+const CAMO_AI_BASE_URL = process.env.CAMO_AI_BASE_URL || 'https://generativelanguage.googleapis.com';
+
+const splitEnvList = (value: string) => value
+  .split(/[\n,]+/)
+  .map(item => item.trim())
+  .filter(Boolean);
 
 const auth = new OAuth2Client(CLIENT_ID, CLIENT_SECRET);
 if (REFRESH_TOKEN) {
@@ -1144,6 +1154,255 @@ app.post('/api/login', async (req, res) => {
   } catch (error: any) {
     console.error('Login error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+async function proxyGovtHubJson(pathname: string, options: RequestInit = {}) {
+  if (!GOVT_HUB_BASE_URL) throw new Error('GOVT_HUB_BASE_URL is not configured');
+  if (!GOVT_HUB_TOKEN) throw new Error('GOVT_HUB_TOKEN is not configured');
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180000);
+  try {
+    const response = await fetch(`${GOVT_HUB_BASE_URL.replace(/\/$/, '')}${pathname}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${GOVT_HUB_TOKEN}`,
+        Accept: 'application/json',
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...options.headers,
+      },
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    let body: any = {};
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      body = { ok: false, error: text || 'Govt Hub returned a non-JSON response' };
+    }
+
+    if (!response.ok || body?.ok === false) {
+      const message = body?.error || body?.message || `Govt Hub request failed: ${response.status}`;
+      const error: any = new Error(message);
+      error.status = response.ok ? 502 : response.status;
+      error.govtHubStatus = response.status;
+      error.body = body;
+      throw error;
+    }
+
+    return body;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function sendGovtHubProxyError(res: any, label: string, error: any) {
+  const status = Number(error?.status || 500);
+  const message = error?.message || 'Govt Hub request failed';
+  const govtHubStatus = error?.govtHubStatus || error?.body?.status || status;
+
+  console.warn(`[Govt Hub] ${label} failed (${govtHubStatus}): ${message}`);
+
+  res.status(status).json({
+    ok: false,
+    error: message,
+    source: 'govt-hub',
+    govtHubStatus,
+    details: error?.body || null,
+  });
+}
+
+app.get('/api/govt-hub/sec/company/registration', async (req, res) => {
+  const query = String(req.query.query || '').trim();
+  if (!query) return res.status(400).json({ error: 'query is required' });
+
+  try {
+    const data = await proxyGovtHubJson(`/sec/company/registration?query=${encodeURIComponent(query)}`);
+    res.json(data);
+  } catch (error: any) {
+    sendGovtHubProxyError(res, 'SEC registration lookup', error);
+  }
+});
+
+app.get('/api/govt-hub/sec/company/name', async (req, res) => {
+  const query = String(req.query.query || '').trim();
+  if (!query) return res.status(400).json({ error: 'query is required' });
+
+  try {
+    const data = await proxyGovtHubJson(`/sec/company/name?query=${encodeURIComponent(query)}`);
+    res.json(data);
+  } catch (error: any) {
+    sendGovtHubProxyError(res, 'SEC company name lookup', error);
+  }
+});
+
+app.post('/api/govt-hub/bir/tin-verifier', async (req, res) => {
+  try {
+    const data = await proxyGovtHubJson('/bir/tin-verifier', {
+      method: 'POST',
+      body: JSON.stringify(req.body || {}),
+    });
+    res.json(data);
+  } catch (error: any) {
+    sendGovtHubProxyError(res, 'BIR TIN verification', error);
+  }
+});
+
+app.post('/api/govt-hub/bir/loa-verifier', async (req, res) => {
+  try {
+    const data = await proxyGovtHubJson('/bir/loa-verifier', {
+      method: 'POST',
+      body: JSON.stringify(req.body || {}),
+    });
+    res.json(data);
+  } catch (error: any) {
+    sendGovtHubProxyError(res, 'BIR LOA verification', error);
+  }
+});
+
+type CamoChatMessage = {
+  role?: string;
+  content?: string;
+};
+
+const CAMO_SYSTEM_PROMPT = [
+  'You are Camo, the MPCA AI Assistant.',
+  'You help users with MPCA Hub workflows and general assistant tasks.',
+  'When an MPCA Hub context snapshot is provided, treat it as the current loaded data from the user session.',
+  'Use the snapshot for specific answers about clients, engagements, operations, deadlines, users, services, and records.',
+  'If a requested record or detail is not present in the snapshot, say it is not available in the current loaded context instead of guessing.',
+  'Credentials, passwords, and sensitive secrets are intentionally excluded from the snapshot.',
+  'You can answer everyday questions, draft text, explain concepts, brainstorm, summarize, and help users think through work.',
+  'When topics involve tax, legal, financial, compliance, or government filings, provide practical general guidance and recommend review by qualified MPCA staff.',
+  'Be clear, concise, friendly, and professional.'
+].join(' ');
+
+function normalizeCamoMessages(input: any): CamoChatMessage[] {
+  const rawMessages = Array.isArray(input?.messages) ? input.messages : [];
+  return rawMessages
+    .map((message: any) => ({
+      role: message?.role === 'assistant' ? 'assistant' : 'user',
+      content: String(message?.content || '').trim(),
+    }))
+    .filter((message: CamoChatMessage) => message.content)
+    .slice(-20);
+}
+
+function extractGeminiReply(body: any) {
+  return body?.candidates?.[0]?.content?.parts
+    ?.map((part: any) => part?.text || '')
+    .join('')
+    .trim();
+}
+
+function getCamoContextText(input: any) {
+  if (!input?.mpcaContext) return '';
+  try {
+    const text = JSON.stringify(input.mpcaContext);
+    return text.length > 60000 ? `${text.slice(0, 60000)}... [context truncated by server]` : text;
+  } catch {
+    return '';
+  }
+}
+
+function getCamoGeminiUrl(model: string) {
+  return `${CAMO_AI_BASE_URL.replace(/\/$/, '')}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+}
+
+async function requestCamoGemini(contents: any[], apiKey: string, model: string, contextText = '') {
+  const systemText = contextText
+    ? `${CAMO_SYSTEM_PROMPT}\n\nCurrent MPCA Hub context snapshot JSON:\n${contextText}`
+    : CAMO_SYSTEM_PROMPT;
+
+  const response = await fetch(getCamoGeminiUrl(model), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: systemText }],
+      },
+      contents,
+      generationConfig: {
+        temperature: 0.4,
+        maxOutputTokens: 1024,
+      },
+    }),
+  });
+
+  const body = await response.json().catch(async () => ({ error: { message: await response.text() } }));
+  if (!response.ok) {
+    const message = body?.error?.message || `Camo request failed: ${response.status}`;
+    const error: any = new Error(message);
+    error.status = response.status;
+    error.body = body;
+    throw error;
+  }
+
+  const reply = extractGeminiReply(body);
+  if (!reply) {
+    const error: any = new Error('Camo returned an empty response');
+    error.status = 502;
+    error.body = body;
+    throw error;
+  }
+
+  return reply;
+}
+
+app.post('/api/camo/chat', async (req, res) => {
+  const apiKeys = splitEnvList(CAMO_AI_API_KEY);
+  const models = splitEnvList(CAMO_AI_MODEL);
+
+  if (apiKeys.length === 0) {
+    return res.status(503).json({ error: 'CAMO_AI_API_KEY is not configured' });
+  }
+
+  if (models.length === 0) {
+    return res.status(503).json({ error: 'CAMO_AI_MODEL is not configured' });
+  }
+
+  const messages = normalizeCamoMessages(req.body);
+  const contextText = getCamoContextText(req.body);
+  if (messages.length === 0) return res.status(400).json({ error: 'messages are required' });
+
+  try {
+    const contents = messages.map(message => ({
+      role: message.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: message.content }],
+    }));
+
+    const attempts: Array<{ keyIndex: number; model: string; status: number; error: string }> = [];
+
+    for (const [keyIndex, apiKey] of apiKeys.entries()) {
+      for (const model of models) {
+        try {
+          const reply = await requestCamoGemini(contents, apiKey, model, contextText);
+          return res.json({ reply, model, keyIndex: keyIndex + 1 });
+        } catch (error: any) {
+          attempts.push({
+            keyIndex: keyIndex + 1,
+            model,
+            status: Number(error?.status || 500),
+            error: error?.message || 'Camo request failed',
+          });
+          console.warn(`[Camo] Attempt failed: key #${keyIndex + 1}, model ${model}, status ${error?.status || 500}: ${error?.message || 'Unknown error'}`);
+        }
+      }
+    }
+
+    const lastAttempt = attempts[attempts.length - 1];
+    res.status(lastAttempt?.status || 502).json({
+      error: 'All configured Camo API keys/models failed or were exhausted',
+      attempts,
+    });
+  } catch (error: any) {
+    console.error('[Camo] Chat failed:', error);
+    res.status(500).json({ error: error.message || 'Camo request failed' });
   }
 });
 

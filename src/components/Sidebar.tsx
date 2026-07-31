@@ -1,5 +1,5 @@
 
-import React, { useContext } from 'react';
+import React, { useContext, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { NAV_LINKS } from '../constants';
 import { ChevronRight, X, LogOut } from 'lucide-react';
@@ -13,6 +13,16 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
   const context = useContext(AppContext);
   const location = useLocation();
+  const [expandedMenus, setExpandedMenus] = useState<Set<string>>(new Set());
+
+  const toggleMenu = (name: string) => {
+    setExpandedMenus(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
 
   return (
     <>
@@ -27,7 +37,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
           isOpen ? 'w-64' : 'w-0 md:w-20'
         } overflow-hidden`}
       >
-        <div className={`flex items-center justify-between p-4 ${isOpen ? '' : 'md:justify-center'}`}>
+        <div className={`flex shrink-0 items-center justify-between p-4 ${isOpen ? '' : 'md:justify-center'}`}>
             <div className={`flex items-center gap-3 ${isOpen ? '' : 'md:hidden'}`}>
                 <div className="relative group">
                     <div className="absolute inset-0 bg-white opacity-20 rounded-[1rem] blur-md group-hover:blur-lg transition-all duration-300" />
@@ -48,7 +58,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
             </button>
         </div>
 
-        <nav className="flex-1 px-2 py-4 space-y-2">
+        <nav className="flex-1 min-h-0 overflow-y-auto px-2 py-4 space-y-2 custom-scrollbar">
           {NAV_LINKS.filter(link => {
             if (link.name === 'Reports') {
               return context?.user?.role === 'Admin';
@@ -58,38 +68,54 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
             <div key={link.name}>
               {link.children ? (
                 <>
-                  <NavLink
-                    to={link.path}
-                    className={({ isActive }) =>
-                      `flex items-center p-2 rounded-lg transition-colors duration-200 ${
-                        isActive || link.children.some((child: any) => location.pathname === child.path)
-                          ? 'bg-primary-dark'
-                          : 'hover:bg-primary-dark/50'
-                      } ${isOpen ? 'justify-start' : 'md:justify-center'}`
-                    }
+                  <button
+                    type="button"
+                    onClick={() => toggleMenu(link.name)}
+                    className={`w-full flex items-center text-left p-2 rounded-lg transition-colors duration-200 ${
+                      link.children.some((child: any) => location.pathname === child.path)
+                        ? 'bg-primary-dark'
+                        : 'hover:bg-primary-dark/50'
+                    } ${isOpen ? 'justify-start' : 'md:justify-center'}`}
                     title={isOpen ? '' : link.name}
                   >
                     <link.icon size={20} />
-                    <span className={`ml-4 flex-1 ${isOpen ? 'opacity-100' : 'opacity-0 md:hidden'}`}>
+                    <span className={`ml-4 flex-1 text-left ${isOpen ? 'opacity-100' : 'opacity-0 md:hidden'}`}>
                       {link.name}
                     </span>
-                    {isOpen && <ChevronRight size={14} className="text-white/60 rotate-90" />}
-                  </NavLink>
-                  <div className={`${isOpen ? 'ml-7 mt-1 space-y-1' : 'hidden'}`}>
-                    {link.children.map((child: any) => (
-                      <NavLink
-                        key={child.name}
-                        to={child.path}
-                        className={({ isActive }) =>
-                          `flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors duration-200 ${
-                            isActive ? 'bg-white/15 text-white' : 'text-white/70 hover:bg-primary-dark/40 hover:text-white'
-                          }`
-                        }
-                      >
-                        <child.icon size={15} />
-                        <span>{child.name}</span>
-                      </NavLink>
-                    ))}
+                    {isOpen && (
+                      <ChevronRight
+                        size={14}
+                        className={`text-white/60 transition-transform duration-300 ease-out ${expandedMenus.has(link.name) ? 'rotate-90' : ''}`}
+                      />
+                    )}
+                  </button>
+                  <div
+                    className={`grid transition-all duration-300 ease-out ${
+                      isOpen
+                        ? expandedMenus.has(link.name)
+                          ? 'ml-7 mt-1 grid-rows-[1fr] opacity-100 translate-y-0'
+                          : 'ml-7 mt-0 grid-rows-[0fr] opacity-0 -translate-y-1 pointer-events-none'
+                        : 'hidden'
+                    }`}
+                  >
+                    <div className="min-h-0 overflow-hidden">
+                      <div className="space-y-1 py-0.5">
+                      {link.children.map((child: any) => (
+                        <NavLink
+                          key={child.name}
+                          to={child.path}
+                          className={({ isActive }) =>
+                            `flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors duration-200 ${
+                              isActive ? 'bg-white/15 text-white' : 'text-white/70 hover:bg-primary-dark/40 hover:text-white'
+                            }`
+                          }
+                        >
+                          <child.icon size={15} />
+                          <span>{child.name}</span>
+                        </NavLink>
+                      ))}
+                      </div>
+                    </div>
                   </div>
                 </>
               ) : (
@@ -114,7 +140,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
           ))}
         </nav>
 
-        <div className="p-2 border-t border-primary-light/20">
+        <div className="shrink-0 p-2 border-t border-primary-light/20">
             <button
               onClick={() => context?.logout()}
               className={`w-full flex items-center p-2 rounded-lg transition-colors duration-200 hover:bg-primary-dark/50 ${isOpen ? 'justify-start' : 'md:justify-center'}`}

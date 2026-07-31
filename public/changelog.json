@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.7.0",
+    "date": "July 31, 2026",
+    "title": "New Hub and AI Assistant",
+    "changes": [
+      "Added the new Gov't Hub section for some SEC and BIR services.",
+      "Added Camo, the MPCA AI Assistant, for general questions, drafting, explanations, and MPCA Hub guidance.",
+      "Improved the sidebar with smoother expand and collapse animation for menu sections."
+    ]
+  },
+  {
     "version": "1.6.1",
     "date": "July 9, 2026",
     "title": "Printing of Reports",

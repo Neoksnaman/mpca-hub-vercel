@@ -138,6 +138,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
 
   useEffect(() => {
     chatOpenRef.current = chatOpen;
+    window.dispatchEvent(new CustomEvent('mpca-office-chat-toggle', { detail: { open: chatOpen } }));
   }, [chatOpen]);
 
   useEffect(() => {
@@ -1184,7 +1185,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                                 </p>
                               </div>
                             ) : (
-                              <p className="text-xs font-semibold leading-relaxed whitespace-pre-wrap break-words">{renderMessageText(message, mine)}</p>
+                              <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{renderMessageText(message, mine)}</p>
                             )}
                             <p className={`text-[9px] font-bold mt-1 ${mine ? 'text-right text-white/70' : 'text-secondary/60'}`}>{formatTime(message.createdAt)}</p>
                           </div>
@@ -1352,7 +1353,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ currentUser, users, polling
                 }}
                 placeholder="Type a message..."
                 rows={1}
-                className="flex-1 min-h-[44px] max-h-[116px] resize-none rounded-[22px] border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-[12px] text-xs font-semibold leading-[18px] outline-none focus:border-primary [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-secondary/50 [&::-webkit-scrollbar-track]:bg-transparent"
+                className="flex-1 min-h-[44px] max-h-[116px] resize-none rounded-[22px] border border-neutral-medium dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-[11px] text-sm font-semibold leading-[20px] outline-none focus:border-primary [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-secondary/50 [&::-webkit-scrollbar-track]:bg-transparent"
               />
               <button
                 onClick={handleSend}

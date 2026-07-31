@@ -3,10 +3,12 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import * as Ably from 'ably';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
+import CamoChat from './components/CamoChat';
 import Dashboard from './pages/Dashboard';
 import Clients from './pages/Clients';
 import Engagements from './pages/Engagements';
 import Operations from './pages/Operations';
+import GovtHub from './pages/GovtHub';
 import Library from './pages/Library';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
@@ -42,6 +44,21 @@ export const AppContext = createContext<AppContextType | null>(null);
 
 const IDLE_RELOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const CHANGELOG_STORAGE_KEY = 'mpca_changelog_seen_version';
+
+const getSeenChangelogVersion = () => {
+  try {
+    return localStorage.getItem(CHANGELOG_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+};
+
+const setSeenChangelogVersion = (version: string) => {
+  try {
+    localStorage.setItem(CHANGELOG_STORAGE_KEY, version);
+  } catch {
+  }
+};
 
 const RootRedirect: React.FC = () => {
   const startTab = localStorage.getItem('startTab') || 'dashboard';
@@ -226,7 +243,7 @@ const App: React.FC = () => {
 
       const loadChangelog = async () => {
           try {
-              const response = await fetch('/changelog.json', { cache: 'no-store' });
+              const response = await fetch(`/changelog.json?t=${Date.now()}`, { cache: 'no-store' });
               if (!response.ok) return;
               const entries = await response.json();
               if (!Array.isArray(entries) || entries.length === 0) return;
@@ -234,11 +251,14 @@ const App: React.FC = () => {
               const latest = entries[0] as ChangelogEntry;
               if (!latest?.version || !latest?.title || !Array.isArray(latest?.changes)) return;
 
-              const seenVersion = localStorage.getItem(CHANGELOG_STORAGE_KEY);
+              const seenVersion = getSeenChangelogVersion();
               if (!cancelled && seenVersion !== latest.version) {
                   setActiveChangelog(latest);
+              } else if (!cancelled) {
+                  setActiveChangelog(null);
               }
           } catch (error) {
+              console.warn('[Changelog] Unable to load changelog.json:', error);
           } finally {
               if (!cancelled) setHasCheckedChangelog(true);
           }
@@ -253,7 +273,7 @@ const App: React.FC = () => {
 
   const dismissChangelog = (rememberVersion: boolean) => {
       if (rememberVersion && activeChangelog?.version) {
-          localStorage.setItem(CHANGELOG_STORAGE_KEY, activeChangelog.version);
+          setSeenChangelogVersion(activeChangelog.version);
       }
       setActiveChangelog(null);
   };
@@ -399,11 +419,15 @@ const App: React.FC = () => {
                   <Route path="/operations" element={user ? <Navigate to="/transmittals" replace /> : <Navigate to="/login" />} />
                   <Route path="/transmittals" element={user ? <Operations /> : <Navigate to="/login" />} />
                   <Route path="/meetings" element={user ? <Operations /> : <Navigate to="/login" />} />
+                  <Route path="/govt-hub" element={user ? <Navigate to="/govt-hub/sec" replace /> : <Navigate to="/login" />} />
+                  <Route path="/govt-hub/sec" element={user ? <GovtHub /> : <Navigate to="/login" />} />
+                  <Route path="/govt-hub/bir" element={user ? <GovtHub /> : <Navigate to="/login" />} />
                   <Route path="/library" element={user ? <Library /> : <Navigate to="/login" />} />
                   <Route path="/reports" element={user ? (user.role === 'Admin' ? <Reports /> : <Navigate to="/" />) : <Navigate to="/login" />} />
                   <Route path="/settings" element={user ? <Settings /> : <Navigate to="/login" />} />
                 </Routes>
               </main>
+              {user && <CamoChat />}
             </div>
           </div>
 
