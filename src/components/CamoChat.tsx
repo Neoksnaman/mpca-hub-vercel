@@ -1,6 +1,6 @@
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Loader2, Send, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, Send, X } from 'lucide-react';
 import { AppContext } from '../App';
 import { sendCamoMessage } from '../services/googleSheetsService';
 
@@ -16,6 +16,7 @@ const CAMO_INTRO =
 const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 const MAX_CONTEXT_ITEMS = 40;
+const CAMO_TUCKED_STORAGE_KEY = 'mpca_camo_launcher_tucked';
 const CAMO_PEEK_SESSION_KEY = 'mpca_camo_peek_count';
 const CAMO_PEEK_DELAYS = [10000, 180000, 480000];
 const CAMO_PEEK_VISIBLE_MS = 7000;
@@ -51,6 +52,22 @@ const CAMO_PEEK_MESSAGES = [
 ];
 
 const getRandomCamoPeek = () => CAMO_PEEK_MESSAGES[Math.floor(Math.random() * CAMO_PEEK_MESSAGES.length)];
+
+const getStoredCamoTucked = () => {
+  try {
+    return localStorage.getItem(CAMO_TUCKED_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+};
+
+const setStoredCamoTucked = (isTucked: boolean) => {
+  try {
+    localStorage.setItem(CAMO_TUCKED_STORAGE_KEY, String(isTucked));
+  } catch {
+    // Non-critical: the launcher simply returns to the default position next load.
+  }
+};
 
 const getCamoPeekCount = () => {
   try {
@@ -406,6 +423,8 @@ const CamoChat: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [officeChatOpen, setOfficeChatOpen] = useState(false);
   const [isHoveringLauncher, setIsHoveringLauncher] = useState(false);
+  const [isHoveringTuckControl, setIsHoveringTuckControl] = useState(false);
+  const [isLauncherTucked, setIsLauncherTucked] = useState(getStoredCamoTucked);
   const [isWiggling, setIsWiggling] = useState(false);
   const [showPeek, setShowPeek] = useState(false);
   const [peekMessage, setPeekMessage] = useState(getRandomCamoPeek);
@@ -449,7 +468,7 @@ const CamoChat: React.FC = () => {
   }, [isHoveringLauncher, isOpen, officeChatOpen]);
 
   useEffect(() => {
-    if (isOpen || officeChatOpen || isHoveringLauncher || peekCount >= CAMO_PEEK_DELAYS.length) return;
+    if (isOpen || officeChatOpen || isLauncherTucked || isHoveringLauncher || peekCount >= CAMO_PEEK_DELAYS.length) return;
 
     const showTimer = window.setTimeout(() => {
       setPeekMessage(getRandomCamoPeek());
@@ -460,7 +479,7 @@ const CamoChat: React.FC = () => {
     }, CAMO_PEEK_DELAYS[peekCount]);
 
     return () => window.clearTimeout(showTimer);
-  }, [isHoveringLauncher, isOpen, officeChatOpen, peekCount]);
+  }, [isHoveringLauncher, isLauncherTucked, isOpen, officeChatOpen, peekCount]);
 
   useEffect(() => {
     if (!showPeek) return;
@@ -474,6 +493,15 @@ const CamoChat: React.FC = () => {
     setIsWiggling(false);
     setIsOpen(true);
     window.setTimeout(() => inputRef.current?.focus(), 120);
+  };
+
+  const toggleLauncherTucked = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    const nextTucked = !isLauncherTucked;
+    setIsLauncherTucked(nextTucked);
+    setStoredCamoTucked(nextTucked);
+    setShowPeek(false);
+    setIsWiggling(false);
   };
 
   const sendMessage = async (content = draft) => {
@@ -605,9 +633,17 @@ const CamoChat: React.FC = () => {
       )}
 
       {!isOpen && !officeChatOpen && (
-        <div className="fixed bottom-5 right-5 z-[12000]">
-          {showPeek && !isHoveringLauncher && (
-            <div className="absolute bottom-16 right-2 mb-2 whitespace-nowrap rounded-2xl border border-neutral-medium bg-white px-3.5 py-2 text-sm font-bold text-neutral-dark shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white">
+        <div
+          className={`group fixed bottom-5 z-[12000] transition-all duration-300 ease-out ${
+            isLauncherTucked ? 'right-[-35px]' : 'right-5'
+          }`}
+        >
+          {showPeek && !isLauncherTucked && !isHoveringLauncher && (
+            <div
+              className={`absolute bottom-16 mb-2 whitespace-nowrap rounded-2xl border border-neutral-medium bg-white px-3.5 py-2 text-sm font-bold text-neutral-dark shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white ${
+                isLauncherTucked ? 'right-10 -rotate-2' : 'right-2'
+              }`}
+            >
               <p>{peekMessage}</p>
             </div>
           )}
@@ -622,13 +658,40 @@ const CamoChat: React.FC = () => {
             onMouseLeave={() => setIsHoveringLauncher(false)}
             className={`group relative flex h-16 w-16 items-center justify-center rounded-full bg-transparent p-0 transition-transform duration-200 hover:-translate-y-0.5 hover:rotate-[-4deg] hover:scale-110 ${
               isWiggling ? 'animate-[camo-wiggle_1.1s_ease-in-out]' : ''
+            } ${
+              isLauncherTucked ? '-rotate-12 scale-90 hover:translate-x-[-8px]' : ''
             }`}
             aria-label="Open Camo"
           >
-            <span className="pointer-events-none absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg bg-neutral-dark px-2.5 py-1.5 text-[11px] font-bold text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 dark:bg-white dark:text-neutral-dark">
+            <span
+              className={`pointer-events-none absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg bg-neutral-dark px-2.5 py-1.5 text-[11px] font-bold text-white opacity-0 shadow-lg transition-opacity dark:bg-white dark:text-neutral-dark ${
+                isLauncherTucked || isHoveringTuckControl ? '' : 'group-hover:opacity-100'
+              }`}
+            >
               Ask Camo
             </span>
-            <img src="/camo.png" alt="" className="h-full w-full object-contain drop-shadow-xl" />
+            <img
+              src="/camo.png"
+              alt=""
+              className={`h-full w-full object-contain drop-shadow-xl ${isLauncherTucked ? '-scale-x-100' : ''}`}
+            />
+          </button>
+          <button
+            type="button"
+            onClick={toggleLauncherTucked}
+            onMouseEnter={() => {
+              setIsHoveringTuckControl(true);
+              setShowPeek(false);
+            }}
+            onMouseLeave={() => setIsHoveringTuckControl(false)}
+            className={`absolute top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center text-secondary drop-shadow-sm transition-all duration-200 hover:text-primary hover:opacity-100 dark:text-gray-300 ${
+              isHoveringLauncher && !isHoveringTuckControl ? 'opacity-0' : 'opacity-70'
+            } ${
+              isLauncherTucked ? '-left-5' : '-left-3'
+            }`}
+            aria-label={isLauncherTucked ? 'Show Camo fully' : 'Tuck Camo to the side'}
+          >
+            {isLauncherTucked ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
           </button>
           <style>{`
             @keyframes camo-wiggle {
