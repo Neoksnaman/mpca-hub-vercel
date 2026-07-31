@@ -507,6 +507,7 @@ const CamoChat: React.FC = () => {
   const openCamo = () => {
     setShowPeek(false);
     setIsWiggling(false);
+    scrollToLatestPendingRef.current = true;
     setIsOpen(true);
     window.setTimeout(() => inputRef.current?.focus(), 120);
   };
