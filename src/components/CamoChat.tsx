@@ -434,7 +434,9 @@ const CamoChat: React.FC = () => {
   const [messages, setMessages] = useState<CamoMessage[]>([
     { id: 'intro', role: 'assistant', content: CAMO_INTRO }
   ]);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const scrollToLatestPendingRef = useRef(false);
 
   const resizeDraftInput = useCallback((element = inputRef.current) => {
     if (!element) return;
@@ -488,6 +490,20 @@ const CamoChat: React.FC = () => {
     return () => window.clearTimeout(hideTimer);
   }, [showPeek]);
 
+  useEffect(() => {
+    if (!isOpen || !scrollToLatestPendingRef.current) return;
+
+    scrollToLatestPendingRef.current = false;
+    window.requestAnimationFrame(() => {
+      const list = messageListRef.current;
+      if (!list) return;
+      list.scrollTop = list.scrollHeight;
+      window.requestAnimationFrame(() => {
+        list.scrollTop = list.scrollHeight;
+      });
+    });
+  }, [isOpen, isThinking, messages.length]);
+
   const openCamo = () => {
     setShowPeek(false);
     setIsWiggling(false);
@@ -511,6 +527,7 @@ const CamoChat: React.FC = () => {
     setDraft('');
     window.setTimeout(() => resizeDraftInput(), 0);
     const nextMessages: CamoMessage[] = [...messages, { id: createId(), role: 'user', content: trimmed }];
+    scrollToLatestPendingRef.current = true;
     setMessages(nextMessages);
     setIsThinking(true);
 
@@ -531,6 +548,7 @@ const CamoChat: React.FC = () => {
           content: data.reply
         }
       ]);
+      scrollToLatestPendingRef.current = true;
     } catch (error: any) {
       setMessages(previous => [
         ...previous,
@@ -540,6 +558,7 @@ const CamoChat: React.FC = () => {
           content: error.message || "I couldn't reach Camo's AI service right now. Please check the API key and server logs."
         }
       ]);
+      scrollToLatestPendingRef.current = true;
     } finally {
       setIsThinking(false);
     }
@@ -569,7 +588,7 @@ const CamoChat: React.FC = () => {
             </button>
           </div>
 
-          <div className="flex-1 space-y-3 overflow-y-auto bg-neutral-light/30 p-4 custom-scrollbar dark:bg-gray-900/40">
+          <div ref={messageListRef} className="flex-1 space-y-3 overflow-y-auto bg-neutral-light/30 p-4 custom-scrollbar dark:bg-gray-900/40">
             {messages.map((message) => (
               <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div
