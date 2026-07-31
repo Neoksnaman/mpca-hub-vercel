@@ -58,7 +58,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
             </button>
         </div>
 
-        <nav className="flex-1 min-h-0 overflow-y-auto px-2 py-4 space-y-2 custom-scrollbar">
+        <nav className="flex-1 min-h-0 overflow-y-auto px-2 py-4 space-y-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {NAV_LINKS.filter(link => {
             if (link.name === 'Reports') {
               return context?.user?.role === 'Admin';

@@ -68,7 +68,7 @@ type BirService = 'tin' | 'loa';
 const ITEMS_PER_PAGE = 10;
 
 const birServices: Array<{ key: BirService; label: string }> = [
-    { key: 'tin', label: 'TIN Verifier' },
+    { key: 'tin', label: 'TIN Search' },
     { key: 'loa', label: 'LOA Verifier' }
 ];
 
@@ -350,17 +350,17 @@ const GovtHub: React.FC = () => {
 
         try {
             const data = await verifyBirTin({
-                tin: getTinDigits(tinForm.tin),
+                tin: '',
                 firstName: tinForm.firstName.trim(),
-                middleName: tinForm.middleName.trim(),
+                middleName: '',
                 lastName: tinForm.lastName.trim(),
                 gender: tinForm.gender.trim(),
                 birthdate: tinForm.birthdate
             });
             setTinResult(data);
-            context?.showToast('TIN record found successfully.', 'success');
+            context?.showToast('TIN search completed successfully.', 'success');
         } catch (err: any) {
-            context?.showToast(err.message || 'Unable to verify TIN record.', 'error');
+            context?.showToast(err.message || 'Unable to search TIN record.', 'error');
         } finally {
             setIsTinVerifying(false);
         }
@@ -403,7 +403,7 @@ const GovtHub: React.FC = () => {
                     </div>
                     <p className="text-sm text-secondary dark:text-gray-300 font-medium pl-4 opacity-70 dark:opacity-100">
                         {activeAgency === 'bir'
-                            ? 'Verify TIN records and Letter of Authority details.'
+                            ? 'Search TIN records and verify Letter of Authority details.'
                             : 'Search SEC company records by registration number or company name.'}
                     </p>
                 </div>
@@ -701,29 +701,10 @@ const GovtHub: React.FC = () => {
                             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.95fr)_minmax(360px,1.05fr)]">
                                 <form onSubmit={handleTinVerify} className="p-3 space-y-2 border-b xl:border-b-0 xl:border-r border-neutral-medium/70 dark:border-gray-700">
                                     <div>
-                                        <h2 className="text-xs font-black text-neutral-dark dark:text-white uppercase tracking-widest">TIN Verifier</h2>
+                                        <h2 className="text-xs font-black text-neutral-dark dark:text-white uppercase tracking-widest">TIN Search</h2>
                                     </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                        <label className="space-y-0.5">
-                                            <span className="text-[9px] font-black uppercase tracking-widest text-secondary dark:text-gray-400">TIN</span>
-                                            <input
-                                                value={tinForm.tin}
-                                                onChange={(event) => setTinForm(prev => ({ ...prev, tin: formatTinForDisplay(event.target.value) }))}
-                                                inputMode="numeric"
-                                                className="w-full h-9 px-3 rounded-lg border border-neutral-medium bg-neutral-light/50 text-sm font-semibold outline-none transition-all focus:border-primary/40 focus:ring-4 focus:ring-primary/5 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                                            />
-                                        </label>
-                                        <label className="space-y-0.5">
-                                            <span className="text-[9px] font-black uppercase tracking-widest text-secondary dark:text-gray-400">Birthdate <span className="text-primary">*</span></span>
-                                            <input
-                                                value={tinForm.birthdate}
-                                                onChange={(event) => setTinForm(prev => ({ ...prev, birthdate: event.target.value }))}
-                                                type="date"
-                                                required
-                                                className="w-full h-9 px-3 rounded-lg border border-neutral-medium bg-neutral-light/50 text-sm font-semibold outline-none transition-all focus:border-primary/40 focus:ring-4 focus:ring-primary/5 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                                            />
-                                        </label>
                                         <label className="space-y-0.5">
                                             <span className="text-[9px] font-black uppercase tracking-widest text-secondary dark:text-gray-400">First Name <span className="text-primary">*</span></span>
                                             <input
@@ -734,18 +715,20 @@ const GovtHub: React.FC = () => {
                                             />
                                         </label>
                                         <label className="space-y-0.5">
-                                            <span className="text-[9px] font-black uppercase tracking-widest text-secondary dark:text-gray-400">Middle Name</span>
-                                            <input
-                                                value={tinForm.middleName}
-                                                onChange={(event) => setTinForm(prev => ({ ...prev, middleName: event.target.value }))}
-                                                className="w-full h-9 px-3 rounded-lg border border-neutral-medium bg-neutral-light/50 text-sm font-semibold outline-none transition-all focus:border-primary/40 focus:ring-4 focus:ring-primary/5 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                                            />
-                                        </label>
-                                        <label className="space-y-0.5">
                                             <span className="text-[9px] font-black uppercase tracking-widest text-secondary dark:text-gray-400">Last Name <span className="text-primary">*</span></span>
                                             <input
                                                 value={tinForm.lastName}
                                                 onChange={(event) => setTinForm(prev => ({ ...prev, lastName: event.target.value }))}
+                                                required
+                                                className="w-full h-9 px-3 rounded-lg border border-neutral-medium bg-neutral-light/50 text-sm font-semibold outline-none transition-all focus:border-primary/40 focus:ring-4 focus:ring-primary/5 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                                            />
+                                        </label>
+                                        <label className="space-y-0.5">
+                                            <span className="text-[9px] font-black uppercase tracking-widest text-secondary dark:text-gray-400">Birthdate <span className="text-primary">*</span></span>
+                                            <input
+                                                value={tinForm.birthdate}
+                                                onChange={(event) => setTinForm(prev => ({ ...prev, birthdate: event.target.value }))}
+                                                type="date"
                                                 required
                                                 className="w-full h-9 px-3 rounded-lg border border-neutral-medium bg-neutral-light/50 text-sm font-semibold outline-none transition-all focus:border-primary/40 focus:ring-4 focus:ring-primary/5 dark:border-gray-700 dark:bg-gray-900 dark:text-white"
                                             />
@@ -768,10 +751,10 @@ const GovtHub: React.FC = () => {
                                     <button
                                         type="submit"
                                         disabled={isTinVerifying}
-                                        className="h-9 px-5 rounded-lg bg-primary text-white text-[10px] font-black uppercase tracking-widest shadow-lg shadow-primary/20 transition-colors hover:bg-primary-dark disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                        className="mt-4 h-9 px-5 rounded-lg bg-primary text-white text-[10px] font-black uppercase tracking-widest shadow-lg shadow-primary/20 transition-colors hover:bg-primary-dark disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                                     >
                                         {isTinVerifying ? <Loader2 size={17} className="animate-spin" /> : <Search size={17} />}
-                                        Verify TIN
+                                        Search TIN
                                     </button>
                                 </form>
 
@@ -787,7 +770,7 @@ const GovtHub: React.FC = () => {
                                         <div className="h-full min-h-[260px] flex items-center justify-center px-6 py-10 text-center">
                                             <div>
                                                 <Search size={28} className="mx-auto mb-3 text-secondary/40" />
-                                                <p className="text-sm font-bold text-secondary dark:text-gray-400">TIN verification result will appear here.</p>
+                                                <p className="text-sm font-bold text-secondary dark:text-gray-400">TIN search result will appear here.</p>
                                             </div>
                                         </div>
                                     )}
@@ -849,7 +832,7 @@ const GovtHub: React.FC = () => {
                                     <button
                                         type="submit"
                                         disabled={isLoaVerifying}
-                                        className="h-9 px-5 rounded-lg bg-primary text-white text-[10px] font-black uppercase tracking-widest shadow-lg shadow-primary/20 transition-colors hover:bg-primary-dark disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                        className="mt-4 h-9 px-5 rounded-lg bg-primary text-white text-[10px] font-black uppercase tracking-widest shadow-lg shadow-primary/20 transition-colors hover:bg-primary-dark disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                                     >
                                         {isLoaVerifying ? <Loader2 size={17} className="animate-spin" /> : <Search size={17} />}
                                         Verify LOA

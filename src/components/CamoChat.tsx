@@ -16,6 +16,23 @@ const CAMO_INTRO =
 const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 const MAX_CONTEXT_ITEMS = 40;
+const CAMO_PEEK_SESSION_KEY = 'mpca_camo_peek_seen';
+
+const hasSeenCamoPeek = () => {
+  try {
+    return sessionStorage.getItem(CAMO_PEEK_SESSION_KEY) === 'true';
+  } catch {
+    return true;
+  }
+};
+
+const markCamoPeekSeen = () => {
+  try {
+    sessionStorage.setItem(CAMO_PEEK_SESSION_KEY, 'true');
+  } catch {
+    // Non-critical: the peek simply may appear again next page load.
+  }
+};
 
 const normalizeText = (value: any) => String(value || '').toLowerCase();
 
@@ -353,6 +370,9 @@ const CamoChat: React.FC = () => {
   const location = useLocation();
   const [isOpen, setIsOpen] = useState(false);
   const [officeChatOpen, setOfficeChatOpen] = useState(false);
+  const [isHoveringLauncher, setIsHoveringLauncher] = useState(false);
+  const [isWiggling, setIsWiggling] = useState(false);
+  const [showPeek, setShowPeek] = useState(false);
   const [draft, setDraft] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [messages, setMessages] = useState<CamoMessage[]>([
@@ -379,7 +399,36 @@ const CamoChat: React.FC = () => {
     return () => window.removeEventListener('mpca-office-chat-toggle', handleOfficeChatToggle);
   }, []);
 
+  useEffect(() => {
+    if (isOpen || officeChatOpen) return;
+
+    const interval = window.setInterval(() => {
+      if (isHoveringLauncher) return;
+      setIsWiggling(true);
+      window.setTimeout(() => setIsWiggling(false), 1200);
+    }, 26000);
+
+    return () => window.clearInterval(interval);
+  }, [isHoveringLauncher, isOpen, officeChatOpen]);
+
+  useEffect(() => {
+    if (isOpen || officeChatOpen || hasSeenCamoPeek()) return;
+
+    const showTimer = window.setTimeout(() => {
+      setShowPeek(true);
+      markCamoPeekSeen();
+    }, 3500);
+    const hideTimer = window.setTimeout(() => setShowPeek(false), 11500);
+
+    return () => {
+      window.clearTimeout(showTimer);
+      window.clearTimeout(hideTimer);
+    };
+  }, [isOpen, officeChatOpen]);
+
   const openCamo = () => {
+    setShowPeek(false);
+    setIsWiggling(false);
     setIsOpen(true);
     window.setTimeout(() => inputRef.current?.focus(), 120);
   };
@@ -428,7 +477,7 @@ const CamoChat: React.FC = () => {
   return (
     <>
       {isOpen && (
-        <div className="fixed bottom-5 right-5 z-[12000] flex h-[540px] max-h-[calc(100vh-3rem)] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[1.5rem] border border-neutral-medium bg-white shadow-2xl animate-in fade-in slide-in-from-bottom-3 duration-300 dark:border-gray-700 dark:bg-gray-800">
+        <div className="fixed bottom-5 right-5 z-[12000] flex h-[540px] max-h-[calc(100vh-3rem)] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[1.5rem] border border-neutral-medium bg-white shadow-2xl animate-in fade-in zoom-in-95 slide-in-from-bottom-3 duration-300 dark:border-gray-700 dark:bg-gray-800">
           <div className="flex items-center justify-between gap-3 border-b border-neutral-medium/60 px-5 py-4 dark:border-gray-700/60">
             <div className="flex min-w-0 items-center gap-3">
               <div className="flex h-11 w-11 shrink-0 items-center justify-center">
@@ -513,14 +562,41 @@ const CamoChat: React.FC = () => {
       )}
 
       {!isOpen && !officeChatOpen && (
-        <button
-          type="button"
-          onClick={openCamo}
-          className="fixed bottom-5 right-5 z-[12000] flex h-16 w-16 items-center justify-center rounded-full bg-transparent p-0 transition-transform hover:-translate-y-0.5"
-          aria-label="Open Camo"
-        >
-          <img src="/camo.png" alt="" className="h-full w-full object-contain drop-shadow-xl" />
-        </button>
+        <div className="fixed bottom-5 right-5 z-[12000]">
+          {showPeek && (
+            <div className="absolute bottom-16 right-2 mb-2 w-40 rounded-2xl border border-neutral-medium bg-white px-4 py-3 text-sm font-bold text-neutral-dark shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white">
+              <p>Need help?</p>
+              <p className="text-xs font-semibold text-secondary dark:text-gray-400">Ask me anything.</p>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={openCamo}
+            onMouseEnter={() => {
+              setIsHoveringLauncher(true);
+              setIsWiggling(false);
+            }}
+            onMouseLeave={() => setIsHoveringLauncher(false)}
+            className={`group relative flex h-16 w-16 items-center justify-center rounded-full bg-transparent p-0 transition-transform duration-200 hover:-translate-y-0.5 hover:rotate-[-4deg] hover:scale-110 ${
+              isWiggling ? 'animate-[camo-wiggle_1.1s_ease-in-out]' : ''
+            }`}
+            aria-label="Open Camo"
+          >
+            <span className="pointer-events-none absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg bg-neutral-dark px-2.5 py-1.5 text-[11px] font-bold text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 dark:bg-white dark:text-neutral-dark">
+              Ask Camo
+            </span>
+            <img src="/camo.png" alt="" className="h-full w-full object-contain drop-shadow-xl" />
+          </button>
+          <style>{`
+            @keyframes camo-wiggle {
+              0%, 100% { transform: rotate(0deg) scale(1); }
+              18% { transform: rotate(-5deg) scale(1.04); }
+              36% { transform: rotate(5deg) scale(1.04); }
+              54% { transform: rotate(-3deg) scale(1.02); }
+              72% { transform: rotate(3deg) scale(1.02); }
+            }
+          `}</style>
+        </div>
       )}
     </>
   );
